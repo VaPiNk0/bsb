@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="sk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Keystroke 2FA · TUKE</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="container">
+    <div class="topbar">
+      <div class="brand"><svg viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" rx="10" fill="#0f5c63"/><rect x="7" y="21" width="4" height="12" rx="1" fill="#f0a830"/><rect x="14" y="12" width="4" height="21" rx="1" fill="#f0a830"/><rect x="21" y="17" width="4" height="16" rx="1" fill="#fff"/><rect x="28" y="8" width="4" height="25" rx="1" fill="#f0a830"/></svg><div>Keystroke 2FA<small>TUKE FEI · Biometrické systémy bezpečnosti</small></div></div>
+      <div class="status-pill" id="configPill">Načítavam konfiguráciu…</div>
+    </div>
+
+    <header class="hero">
+      <div>
+        <h1>Heslo je prvý krok. Rytmus písania druhý.</h1>
+        <p class="lead">Prihlásenie overuje, čo vieš (heslo), aj ako píšeš (časovanie kláves).</p>
+      </div>
+    </header>
+
+    <section class="notice">
+      <strong>Informovaný súhlas.</strong>
+      Pokusy používajú časovanie kláves na vytvorenie biometrickej šablóny. Ukladajú sa len číselné príznaky a technické metadáta potrebné na vyhodnotenie projektu; nie nahrávka obrazovky ani heslo v čitateľnej podobe.
+    </section>
+
+    <nav class="tabs" aria-label="Režim">
+      <button class="tab active" data-tab="enrollment">Registrácia</button>
+      <button class="tab" data-tab="verification">Prihlásenie</button>
+    </nav>
+
+    <section class="panel tab-panel active" id="enrollmentPanel">
+      <div class="panel-header">
+        <div>
+          <h2>Registrácia</h2>
+          <p>Šablóna vzniká z viacerých viet. Každá vzorka je iná veta, takže sa učí tvoj štýl písania, nie jednu vetu naspamäť.</p>
+        </div>
+        <div class="counter" id="enrollCounter">0 / 10</div>
+      </div>
+
+      <form id="enrollForm" class="form-grid">
+        <label>
+          Používateľské meno
+          <input id="enrollUsername" required minlength="3" maxlength="32" autocomplete="username">
+        </label>
+        <label>
+          Heslo
+          <input id="enrollPassword" type="password" required minlength="10" autocomplete="new-password">
+        </label>
+        <label>
+          Heslo znova
+          <input id="enrollPasswordConfirm" type="password" required minlength="10" autocomplete="new-password">
+        </label>
+        <label>
+          Počet vzoriek
+          <select id="enrollTarget">
+            <option value="12">12</option>
+          </select>
+        </label>
+        <div class="form-actions full">
+          <button class="primary" type="submit">Začať registráciu</button>
+          <button class="secondary" id="enrollCancel" type="button" hidden>Zrušiť</button>
+        </div>
+      </form>
+
+      <div id="enrollCapture" class="capture-box" hidden>
+        <div class="capture-meta">
+          <div><span class="muted">Používateľ</span> <strong id="enrollActiveUser">—</strong></div>
+          <div><span class="muted">Vzorka</span> <strong id="enrollSampleNo">—</strong></div>
+        </div>
+        <div class="phrase" id="enrollPhrase">—</div>
+        <div class="typing-area" id="enrollTyping" tabindex="0" role="textbox" aria-label="Plocha pre prepis vety"></div>
+        <div class="rhythm-wrap">
+          <div class="rhythm-legend"><span><i class="k-dwell"></i>držanie klávesy (dwell)</span><span><i class="k-dd"></i>čas medzi stlačeniami (DD)</span><em id="enrollTempo">—</em></div>
+          <div class="rhythm" id="enrollRhythm" aria-label="Živý graf rytmu písania"></div>
+        </div>
+        <div class="capture-help" id="enrollHelp">Prepíš vetu malými písmenami bez diakritiky. Preklepy oprav Backspace-om, Shift a paste pokus zneplatnia.</div>
+        <div class="segments" id="enrollProgress" aria-label="Postup registrácie"></div>
+        <div class="form-actions">
+          <button class="secondary" id="enrollRepeat" type="button">Opakovať aktuálnu vzorku</button>
+          <button class="primary" id="enrollFinish" type="button" disabled>Dokončiť registráciu</button>
+        </div>
+      </div>
+      <div class="message" id="enrollMessage"></div>
+    </section>
+
+    <section class="panel tab-panel" id="verificationPanel">
+      <div class="panel-header">
+        <div>
+          <h2>Prihlásenie</h2>
+          <p>Prihlásenie: najprv heslo, potom jeden behaviorálny vzor.</p>
+        </div>
+        <label class="switch-row" id="testModeRow" hidden><input id="testMode" type="checkbox"> Testovací mód</label>
+      </div>
+
+      <form id="verifyForm" class="form-grid">
+        <label>
+          <span id="verifyUsernameLabel">Používateľské meno</span>
+          <input id="verifyUsername" required minlength="3" maxlength="32" autocomplete="username">
+        </label>
+        <label>
+          Heslo
+          <input id="verifyPassword" type="password" required autocomplete="current-password">
+        </label>
+        <label id="actorField" hidden>
+          Tester ID
+          <input id="actorLabel" maxlength="64" placeholder="napr. P03">
+        </label>
+        <label id="typeField" hidden>
+          Typ pokusu
+          <select id="attemptType">
+            <option value="genuine">genuine</option>
+            <option value="impostor">impostor</option>
+            <option value="imitacia">imitácia</option>
+          </select>
+        </label>
+        <div class="consent-line full">
+          <label class="checkbox-label"><input id="verifyConsent" type="checkbox" required> Súhlasím so spracovaním biometrických časových príznakov pre tento školský experiment.</label>
+        </div>
+        <div class="form-actions full">
+          <button class="primary" type="submit">Pokračovať na písanie</button>
+        </div>
+      </form>
+
+      <div id="verifyCapture" class="capture-box" hidden>
+        <div class="capture-meta">
+          <div><span class="muted">Účet</span> <strong id="verifyActiveUser">—</strong></div>
+          <div><span class="muted">Challenge</span> <strong id="verifyChallengeStatus">aktívny</strong></div>
+        </div>
+        <div class="phrase" id="verifyPhrase">—</div>
+        <div class="typing-area" id="verifyTyping" tabindex="0" role="textbox" aria-label="Plocha pre prepis vety"></div>
+        <div class="rhythm-wrap">
+          <div class="rhythm-legend"><span><i class="k-dwell"></i>držanie klávesy (dwell)</span><span><i class="k-dd"></i>čas medzi stlačeniami (DD)</span><em id="verifyTempo">—</em></div>
+          <div class="rhythm" id="verifyRhythm" aria-label="Živý graf rytmu písania"></div>
+        </div>
+        <div class="capture-help" id="verifyHelp">Prepíš vetu. Časovanie sa zaznamenáva iba počas tohto pokusu, opravy Backspace-om sú povolené.</div>
+        <div class="form-actions">
+          <button class="secondary" id="verifyRepeat" type="button">Opakovať</button>
+          <button class="primary" id="verifySubmit" type="button" disabled>Vyhodnotiť pokus</button>
+        </div>
+      </div>
+
+      <div id="resultCard" class="result-card" hidden>
+        <div class="result-main">
+          <span class="result-label">Výsledok</span>
+          <strong id="resultText">—</strong>
+        </div>
+        <div class="gauge" aria-hidden="true"><div class="gauge-fill" id="gaugeFill"></div><div class="gauge-mark"></div></div>
+        <div class="result-metrics">
+          <div><span>Skóre</span><strong id="resultScore">—</strong></div>
+          <div><span>Prah</span><strong id="resultThreshold">—</strong></div>
+          <div><span>Metrika</span><strong id="resultMetric">—</strong></div>
+        </div>
+        <a id="adminLink" class="primary button-link" href="/admin" hidden>Otvoriť admin panel</a>
+      </div>
+      <div class="message" id="verifyMessage"></div>
+
+      <div id="refreshCard" class="refresh-card" hidden>
+        <div class="refresh-head">
+          <div>
+            <h3>Mesačná obnova šablóny</h3>
+            <p id="refreshText">—</p>
+          </div>
+          <div class="form-actions" id="refreshActions">
+            <button class="primary" id="refreshStart" type="button">Začať obnovu</button>
+            <button class="secondary" id="refreshLater" type="button">Neskôr</button>
+          </div>
+        </div>
+        <div id="refreshCapture" class="capture-box" hidden>
+          <div class="capture-meta">
+            <div><span class="muted">Vzorka</span> <strong id="refreshSampleNo">—</strong></div>
+            <div class="muted">Odmietnutá vzorka sa nepočíta, napíš ďalšiu.</div>
+          </div>
+          <div class="segments" id="refreshProgress" aria-label="Postup obnovy"></div>
+          <div class="phrase" id="refreshPhrase">—</div>
+          <div class="typing-area" id="refreshTyping" tabindex="0" role="textbox" aria-label="Plocha pre prepis vety"></div>
+          <div class="rhythm-wrap">
+          <div class="rhythm-legend"><span><i class="k-dwell"></i>držanie klávesy (dwell)</span><span><i class="k-dd"></i>čas medzi stlačeniami (DD)</span><em id="refreshTempo">—</em></div>
+          <div class="rhythm" id="refreshRhythm" aria-label="Živý graf rytmu písania"></div>
+        </div>
+        </div>
+        <div id="refreshReport" class="report" hidden>
+          <div class="report-head"><span class="badge" id="reportBadge">—</span><strong id="reportTitle">—</strong></div>
+          <p id="reportText">—</p>
+          <div class="result-metrics">
+            <div><span>Tempo písania</span><strong id="reportSpeed">—</strong></div>
+            <div><span>Stabilita rytmu</span><strong id="reportConsistency">—</strong></div>
+            <div><span>Prah (pôvodný → nový)</span><strong id="reportThreshold">—</strong></div>
+          </div>
+        </div>
+        <div class="message" id="refreshMessage"></div>
+      </div>
+
+    </section>
+  </main>
+
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

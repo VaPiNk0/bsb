@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="sk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin Panel</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="container wide">
+    <div class="topbar">
+      <div class="brand"><svg viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" rx="10" fill="#0f5c63"/><rect x="7" y="21" width="4" height="12" rx="1" fill="#f0a830"/><rect x="14" y="12" width="4" height="21" rx="1" fill="#f0a830"/><rect x="21" y="17" width="4" height="16" rx="1" fill="#fff"/><rect x="28" y="8" width="4" height="25" rx="1" fill="#f0a830"/></svg><div>Keystroke 2FA<small>Admin · audit a konfigurácia</small></div></div>
+      <div class="form-actions"><span class="status-pill" id="currentUser">—</span><button class="secondary" id="logoutBtn">Odhlásiť</button></div>
+    </div>
+    <header class="hero"><div><h1>Prehľad pokusov</h1><p class="lead">Kto sa prihlasoval, aké mal skóre a kde leží prah.</p></div></header>
+
+    <section class="stats-grid" id="statsGrid"></section>
+
+    <section class="panel">
+      <div class="panel-header"><div><h2>Skóre voči prahu</h2><p>Každý bod je jeden pokus. Pod čiarou 1,0 je pokus prijatý.</p></div></div>
+      <div id="scoreChart"></div>
+      <div class="chart-legend"><span><i class="lg-genuine"></i>genuine</span><span><i class="lg-impostor"></i>impostor</span><span><i class="lg-imitacia"></i>imitácia</span></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header"><h2>Používatelia</h2></div>
+      <div class="table-wrap"><table><thead><tr><th>Meno</th><th>Vzorky</th><th>Šablóna</th><th>Cyklus</th><th>Obnova šablóny</th><th>Fail count</th><th>Lock</th><th></th></tr></thead><tbody id="usersTable"></tbody></table></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header"><div><h2>Vývoj písania</h2><p>Šablóna sa raz za mesiac obnoví. Tu vidno, či sa písanie používateľov zlepšuje alebo zhoršuje.</p></div></div>
+      <div id="trendChart"></div>
+      <div class="chart-legend" id="trendLegend"></div>
+      <div class="table-wrap"><table><thead><tr><th>Dátum</th><th>Používateľ</th><th>Cyklus</th><th>Trend</th><th>Tempo</th><th>Stabilita</th><th>Prah</th><th>Poznámka</th></tr></thead><tbody id="historyTable"></tbody></table></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header"><h2>Audit log</h2></div>
+      <div class="table-wrap"><table><thead><tr><th>Čas</th><th>Účet</th><th>Tester</th><th>Typ</th><th>Skóre</th><th>Prah</th><th>Výsledok</th><th>Dôvod</th></tr></thead><tbody id="attemptsTable"></tbody></table></div>
+    </section>
+  </main>
+  <script src="/static/admin.js" defer></script>
+</body>
+</html>
