@@ -4,6 +4,9 @@ import json
 import math
 import re
 import secrets
+import time
+import urllib.parse
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -51,15 +54,53 @@ app.secret_key = settings.SECRET_KEY
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=settings.COOKIE_SECURE,
     MAX_CONTENT_LENGTH=64 * 1024,
 )
 
 init_db()
 
 
+TURNSTILE_VERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+
+
+class HumanCheckFailed(Exception):
+    pass
+
+
+def via_trusted_proxy() -> bool:
+    supplied = request.headers.get("X-Proxy-Secret", "")
+    return bool(settings.PROXY_SECRET) and secrets.compare_digest(supplied, settings.PROXY_SECRET)
+
+
 def client_ip() -> str:
-    # Demo server beží bez reverse proxy; X-Forwarded-For by default never dôverujeme.
+    # Hlavičkám o pôvodnej IP veríme len od vlastnej proxy (preukáže sa tajomstvom); inak by si
+    # ich klient nastavil sám a obišiel limit pokusov.
+    if via_trusted_proxy():
+        return request.headers.get("X-Client-IP") or request.remote_addr or "unknown"
     return request.remote_addr or "unknown"
+
+
+def turnstile_ok(token: str) -> bool:
+    data = urllib.parse.urlencode(
+        {"secret": settings.TURNSTILE_SECRET, "response": token, "remoteip": client_ip()}
+    ).encode()
+    try:
+        with urllib.request.urlopen(TURNSTILE_VERIFY_URL, data=data, timeout=8) as response:
+            return bool(json.load(response).get("success"))
+    except (OSError, ValueError):
+        return False   # keď sa overenie nedá urobiť, nepúšťame
+
+
+def require_human(body: dict) -> None:
+    """Kontrola proti botom: token z Turnstile sa overí raz a relácia si to chvíľu pamätá,
+    takže ďalšie vety tej istej registrácie či prihlásenia už widget nepotrebujú."""
+    if not settings.TURNSTILE_SECRET or session.get("human_until", 0) > time.time():
+        return
+    token = str(body.get("turnstile") or "")
+    if not token or len(token) > 4096 or not turnstile_ok(token):
+        raise HumanCheckFailed("Overenie, že nie si robot, zlyhalo. Skús to znova.")
+    session["human_until"] = time.time() + settings.HUMAN_CHECK_TTL_SECONDS
 
 
 def csrf_token() -> str:
@@ -217,13 +258,25 @@ def store_attempt(
     )
 
 
+@app.before_request
+def only_through_proxy():
+    if settings.PROXY_SECRET and request.path != "/api/health" and not via_trusted_proxy():
+        return jsonify(error="Neautorizované"), 403
+
+
+@app.errorhandler(HumanCheckFailed)
+def human_check_failed(exc):
+    return jsonify(error=str(exc), captcha=True), 403
+
+
 @app.after_request
 def security_headers(response):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Content-Security-Policy"] = (
-        "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; "
+        "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'; "
+        "connect-src 'self'; frame-src https://challenges.cloudflare.com; "
         "img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
     )
     return response
@@ -260,6 +313,7 @@ def bootstrap():
         metric=settings.METRIC,
         k=settings.K,
         test_mode_allowed=settings.ALLOW_TEST_MODE,
+        turnstile_site_key=settings.TURNSTILE_SITE_KEY if settings.TURNSTILE_SECRET else "",
     )
 
 
@@ -275,6 +329,7 @@ def enrollment_begin():
             raise ValueError("Heslo musí mať aspoň 10 znakov")
         if password != confirm:
             raise ValueError("Heslá sa nezhodujú")
+        require_human(body)
 
         user = get_user_by_username(username)
         if user:
@@ -356,6 +411,7 @@ def verification_begin():
         require_csrf()
         body = json_body()
         username = validate_username(body.get("username", ""))
+        require_human(body)
         user = get_user_by_username(username)
         verify_rate_limit(username)
         if not user or not user["template_json"]:

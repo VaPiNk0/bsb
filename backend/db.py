@@ -1,11 +1,17 @@
+"""Úložisko: lokálne SQLite (default), v nasadení Postgres (Supabase) cez DATABASE_URL.
+
+SQL je spoločné pre obe databázy; líši sa len zástupný znak parametra, typy v schéme
+a spôsob, akým INSERT vráti nové id.
+"""
 from __future__ import annotations
 
 import hashlib
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from .config import settings
 
@@ -18,18 +24,77 @@ def parse_iso(value: str) -> datetime:
     return datetime.fromisoformat(value)
 
 
-def _connect() -> sqlite3.Connection:
+IS_POSTGRES = bool(settings.DATABASE_URL)
+TABLES = ["users", "enrollment_samples", "challenges", "auth_attempts", "refresh_samples", "template_history"]
+_pool = None
+
+
+class _Postgres:
+    """Rovnaké rozhranie ako sqlite3.Connection.execute, len so zástupným znakom %s."""
+
+    def __init__(self, conn):
+        self.conn = conn
+
+    def execute(self, sql: str, params: tuple | list = ()):
+        return self.conn.execute(sql.replace("?", "%s"), params)
+
+
+def _postgres_pool():
+    global _pool
+    if _pool is None:
+        from psycopg.rows import dict_row
+        from psycopg_pool import ConnectionPool
+
+        # Spojenie do Supabase stojí TLS handshake, preto sa drží v poole. prepare_threshold=None:
+        # Supabase pooler v transakčnom režime nepodporuje pripravené príkazy.
+        _pool = ConnectionPool(
+            settings.DATABASE_URL, min_size=1, max_size=5, open=True,
+            kwargs={"row_factory": dict_row, "prepare_threshold": None},
+        )
+    return _pool
+
+
+@contextmanager
+def _connect() -> Iterator[Any]:
+    """Jedna transakcia: pri výnimke rollback, inak commit; spojenie sa vždy uvoľní."""
+    if IS_POSTGRES:
+        with _postgres_pool().connection() as conn:
+            yield _Postgres(conn)
+        return
     conn = sqlite3.connect(settings.DB_PATH, timeout=10)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
+
+def _insert(conn, sql: str, params: tuple | list) -> int:
+    if IS_POSTGRES:
+        return int(conn.execute(sql + " RETURNING id", params).fetchone()["id"])
+    return int(conn.execute(sql, params).lastrowid)
+
+
+def _columns(conn, table: str) -> set[str]:
+    if IS_POSTGRES:
+        rows = conn.execute(
+            "SELECT column_name AS name FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = ?", (table,)
+        ).fetchall()
+    else:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return {row["name"] for row in rows}
 
 
 def init_db() -> None:
-    Path(settings.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    if not IS_POSTGRES:
+        Path(settings.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     with _connect() as conn:
-        conn.execute("PRAGMA journal_mode=WAL")   # zapíše sa do súboru DB, stačí raz
-        conn.executescript(
+        if not IS_POSTGRES:
+            conn.execute("PRAGMA journal_mode=WAL")   # zapíše sa do súboru DB, stačí raz
+        schema = (
             """
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -120,6 +185,12 @@ def init_db() -> None:
                 ON auth_attempts(user_id, feature_hash);
             """
         )
+        if IS_POSTGRES:
+            schema = schema.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY")
+            schema = schema.replace(" REAL", " DOUBLE PRECISION")   # REAL je v Postgrese len 4-bajtový
+        for statement in schema.split(";"):
+            if statement.strip():
+                conn.execute(statement)
         # migrácia starších databáz: doplní stĺpec phrase (staré pevné-vetové vektory ale už nesedia)
         migrations = {
             "enrollment_samples": [("phrase", "TEXT"), ("cycle", "INTEGER NOT NULL DEFAULT 0")],
@@ -128,10 +199,15 @@ def init_db() -> None:
             "users": [("template_updated_at", "TEXT"), ("template_cycle", "INTEGER NOT NULL DEFAULT 0")],
         }
         for table, wanted in migrations.items():
-            columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+            columns = _columns(conn, table)
             for name, ddl in wanted:
                 if name not in columns:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+        if IS_POSTGRES:
+            # Supabase vystavuje schému public cez REST API s verejným anon kľúčom. Zapnuté RLS
+            # bez politík tam všetko zakáže; backend sa pripája ako vlastník tabuliek a RLS sa ho netýka.
+            for table in TABLES:
+                conn.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
 
 
 def feature_hash(features: list[float | None]) -> str:
@@ -139,23 +215,23 @@ def feature_hash(features: list[float | None]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def get_user_by_username(username: str) -> sqlite3.Row | None:
+def get_user_by_username(username: str) -> Any | None:
     with _connect() as conn:
         return conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
 
 
-def get_user(user_id: int) -> sqlite3.Row | None:
+def get_user(user_id: int) -> Any | None:
     with _connect() as conn:
         return conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
 
 
 def create_user(username: str, password_hash: str) -> int:
     with _connect() as conn:
-        cursor = conn.execute(
+        return _insert(
+            conn,
             "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
             (username, password_hash, now_iso()),
         )
-        return int(cursor.lastrowid)
 
 
 def add_enrollment_sample(
@@ -163,15 +239,15 @@ def add_enrollment_sample(
 ) -> int:
     digest = feature_hash(features)
     with _connect() as conn:
-        cursor = conn.execute(
+        return _insert(
+            conn,
             "INSERT INTO enrollment_samples "
             "(user_id, sample_index, features_json, feature_hash, phrase, cycle, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (user_id, sample_index, json.dumps(features), digest, phrase, cycle, now_iso()),
         )
-        return int(cursor.lastrowid)
 
 
-def get_enrollment_samples(user_id: int) -> list[sqlite3.Row]:
+def get_enrollment_samples(user_id: int) -> list[Any]:
     with _connect() as conn:
         return conn.execute(
             "SELECT * FROM enrollment_samples WHERE user_id = ? ORDER BY sample_index ASC", (user_id,)
@@ -191,14 +267,14 @@ def create_challenge(user_id: int, purpose: str, token: str, ttl_seconds: int, p
     created = datetime.now(timezone.utc)
     expires = created + timedelta(seconds=ttl_seconds)
     with _connect() as conn:
-        cursor = conn.execute(
+        return _insert(
+            conn,
             "INSERT INTO challenges (token_hash, user_id, purpose, phrase, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)",
             (digest, user_id, purpose, phrase, expires.isoformat(), created.isoformat()),
         )
-        return int(cursor.lastrowid)
 
 
-def consume_challenge(token: str, user_id: int, purpose: str) -> sqlite3.Row | None:
+def consume_challenge(token: str, user_id: int, purpose: str) -> Any | None:
     digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
     with _connect() as conn:
         row = conn.execute(
@@ -241,11 +317,11 @@ def insert_attempt(data: dict[str, Any]) -> int:
     ]
     values = [data.get(column) for column in columns]
     with _connect() as conn:
-        cursor = conn.execute(
+        return _insert(
+            conn,
             f"INSERT INTO auth_attempts ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
             values,
         )
-        return int(cursor.lastrowid)
 
 
 def update_auth_state(user_id: int, accepted: bool, lock_threshold: int, lock_seconds: int) -> None:
@@ -267,7 +343,7 @@ def update_auth_state(user_id: int, accepted: bool, lock_threshold: int, lock_se
             conn.execute("UPDATE users SET failed_count = ? WHERE id = ?", (failures, user_id))
 
 
-def list_users() -> list[sqlite3.Row]:
+def list_users() -> list[Any]:
     with _connect() as conn:
         return conn.execute(
             "SELECT id, username, failed_count, lock_until, created_at, template_updated_at, template_cycle, "
@@ -277,7 +353,7 @@ def list_users() -> list[sqlite3.Row]:
         ).fetchall()
 
 
-def list_attempts(limit: int = 100) -> list[sqlite3.Row]:
+def list_attempts(limit: int = 100) -> list[Any]:
     with _connect() as conn:
         return conn.execute(
             "SELECT id, username, actor_label, attempt_type, impersonated_username, score, threshold, phrase, "
@@ -312,15 +388,15 @@ def age_template(user_id: int, days: int) -> None:
 
 def add_refresh_sample(user_id: int, cycle: int, features: list[float | None], phrase: str, score: float) -> int:
     with _connect() as conn:
-        cursor = conn.execute(
+        return _insert(
+            conn,
             "INSERT INTO refresh_samples (user_id, cycle, features_json, feature_hash, phrase, score, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (user_id, cycle, json.dumps(features), feature_hash(features), phrase, score, now_iso()),
         )
-        return int(cursor.lastrowid)
 
 
-def get_refresh_samples(user_id: int, cycle: int) -> list[sqlite3.Row]:
+def get_refresh_samples(user_id: int, cycle: int) -> list[Any]:
     with _connect() as conn:
         return conn.execute(
             "SELECT * FROM refresh_samples WHERE user_id = ? AND cycle = ? ORDER BY id ASC", (user_id, cycle)
@@ -339,14 +415,14 @@ def insert_history(data: dict[str, Any]) -> int:
         "new_samples", "created_at",
     ]
     with _connect() as conn:
-        cursor = conn.execute(
+        return _insert(
+            conn,
             f"INSERT INTO template_history ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
             [data.get(c) for c in columns],
         )
-        return int(cursor.lastrowid)
 
 
-def list_history(limit: int = 200) -> list[sqlite3.Row]:
+def list_history(limit: int = 200) -> list[Any]:
     with _connect() as conn:
         return conn.execute(
             "SELECT h.*, u.username FROM template_history h JOIN users u ON u.id = h.user_id "

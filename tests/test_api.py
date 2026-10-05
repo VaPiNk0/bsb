@@ -19,23 +19,34 @@ def make_events(phrase, rng, sig=0, scale=1.0, jitter=15.0):
 
 
 @pytest.fixture()
-def client(monkeypatch):
+def client(monkeypatch, request):
+    for name, value in getattr(request, "param", {}).items():   # nastavenia nasadenia pre daný test
+        monkeypatch.setenv(name, value)
     tmp = tempfile.mkdtemp()
     monkeypatch.setenv("DB_PATH", os.path.join(tmp, "t.db"))
     monkeypatch.setenv("ALLOW_TEST_MODE", "0")
+    # TEST_DATABASE_URL=postgresql://... pustí tie isté testy proti Postgresu (tabuľky sa zmažú!)
+    monkeypatch.setenv("DATABASE_URL", os.getenv("TEST_DATABASE_URL", ""))
     import backend.config as config
     import backend.db as db
     import backend.app as appmod
     importlib.reload(config)
     importlib.reload(db)
+    if db.IS_POSTGRES:
+        with db._connect() as conn:
+            conn.execute("DROP TABLE IF EXISTS " + ", ".join(db.TABLES) + " CASCADE")
     importlib.reload(appmod)
     import backend.sentences as sentences
     monkeypatch.setattr(sentences, "_rng", random.Random(1234))   # deterministické vety => stabilné testy
     appmod.app.config["TESTING"] = True
     c = appmod.app.test_client()
+    if config.settings.PROXY_SECRET:
+        c.environ_base["HTTP_X_PROXY_SECRET"] = config.settings.PROXY_SECRET
     csrf = c.get("/api/bootstrap").get_json()["csrf"]
     c.csrf = {"X-CSRF-Token": csrf}
-    return c
+    yield c
+    if db._pool is not None:
+        db._pool.close()
 
 
 def enroll(c, username="P01", password="dlhe-heslo-123", n=12, jitter=15.0):
@@ -275,3 +286,42 @@ def test_enrollment_checks_password_of_existing_account(client):
     wrong = dict(body, password="ine-heslo-456789", password_confirm="ine-heslo-456789")
     assert other.post("/api/enrollment/begin", json=wrong, headers=headers).status_code == 409
     assert other.post("/api/enrollment/begin", json=body, headers=headers).status_code == 200
+
+
+# ---------- nasadenie: ochrana proti botom a proxy ----------
+
+@pytest.mark.parametrize("client", [{"TURNSTILE_SITE_KEY": "site", "TURNSTILE_SECRET": "secret"}], indirect=True)
+def test_bot_check_is_required_once_per_session(client, monkeypatch):
+    import backend.app as appmod
+    seen = []
+    monkeypatch.setattr(appmod, "turnstile_ok", lambda token: seen.append(token) or token == "good")
+    assert client.get("/api/bootstrap").get_json()["turnstile_site_key"] == "site"
+    body = {"username": "P03", "password": "dlhe-heslo-123", "password_confirm": "dlhe-heslo-123"}
+
+    r = client.post("/api/enrollment/begin", json=body, headers=c_h(client))
+    assert r.status_code == 403 and r.get_json()["captcha"] is True          # bez tokenu
+    r = client.post("/api/verification/begin", json={"username": "P03", "turnstile": "bad"}, headers=c_h(client))
+    assert r.status_code == 403
+    import backend.db as db
+    assert db.get_user_by_username("P03") is None                             # bot účet nevytvoril
+
+    assert client.post("/api/enrollment/begin", json=dict(body, turnstile="good"), headers=c_h(client)).status_code == 200
+    # ďalšie vety tej istej relácie už token nepotrebujú a Cloudflare sa znova nevolá
+    assert client.post("/api/enrollment/begin", json=body, headers=c_h(client)).status_code == 200
+    assert seen == ["bad", "good"]
+
+
+@pytest.mark.parametrize("client", [{"PROXY_SECRET": "tajne"}], indirect=True)
+def test_api_answers_only_through_the_proxy(client):
+    import backend.app as appmod
+    direct = appmod.app.test_client()
+    assert direct.get("/api/bootstrap").status_code == 403
+    assert direct.get("/api/bootstrap", headers={"X-Proxy-Secret": "zle"}).status_code == 403
+    assert direct.get("/api/health").status_code == 200                       # health check hostingu
+    assert client.get("/api/bootstrap").status_code == 200
+
+    # IP klienta sa berie z hlavičky proxy, nie z adresy proxy servera
+    client.post("/api/verification", json={"username": "nikto", "password": "x", "challenge": "x", "events": []},
+                headers={**c_h(client), "X-Client-IP": "203.0.113.7"})
+    import backend.db as db
+    assert db.list_attempts(1)[0]["ip"] == "203.0.113.7"

@@ -57,8 +57,19 @@ class Settings:
     ADAPTIVE_TEMPLATE: bool = os.getenv("ADAPTIVE_TEMPLATE", "0") == "1"
     ADAPTIVE_ALPHA: float = float(os.getenv("ADAPTIVE_ALPHA", "0.05"))
 
+    # Nasadenie. Cloudflare Turnstile chráni registráciu a prihlásenie pred botmi; bez kľúčov je vypnutý.
+    TURNSTILE_SITE_KEY: str = os.getenv("TURNSTILE_SITE_KEY", "")
+    TURNSTILE_SECRET: str = os.getenv("TURNSTILE_SECRET", "")
+    HUMAN_CHECK_TTL_SECONDS: int = int(os.getenv("HUMAN_CHECK_TTL_SECONDS", "1800"))
+    # Tajomstvo, ktorým sa backendu preukazuje proxy na Cloudflare Pages. Ak je nastavené, /api
+    # odpovedá len cez proxy a skutočná IP klienta sa berie z jej hlavičky.
+    PROXY_SECRET: str = os.getenv("PROXY_SECRET", "")
+    COOKIE_SECURE: bool = os.getenv("COOKIE_SECURE", "0") == "1"
+
     SECRET_KEY: str = os.getenv("SECRET_KEY") or secrets.token_hex(32)
     DB_PATH: str = os.getenv("DB_PATH", str(PROJECT_ROOT / "data" / "keystroke.db"))
+    # Postgres (Supabase) connection string; ak je nastavený, použije sa namiesto SQLite súboru.
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "")
 
     def validate(self) -> None:
         if not (0.0 <= self.K <= 10.0):

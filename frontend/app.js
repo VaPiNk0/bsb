@@ -243,6 +243,38 @@ class TypingCapture {
   }
 }
 
+// ---------- ochrana proti botom (Cloudflare Turnstile) ----------
+// Widget sa zobrazí len vtedy, keď ho server má zapnutý. Token sa posiela s prvou požiadavkou
+// registrácie/prihlásenia; server si potom reláciu chvíľu pamätá ako overenú.
+
+const turnstileWidgets = {};
+
+function setupTurnstile() {
+  if (!BOOT.turnstile_site_key) return;
+  window.onTurnstileLoad = () => {
+    for (const name of ["enroll", "verify"]) {
+      const box = $(`${name}Turnstile`);
+      box.hidden = false;
+      turnstileWidgets[name] = window.turnstile.render(box, { sitekey: BOOT.turnstile_site_key, language: "sk" });
+    }
+  };
+  const script = document.createElement("script");
+  script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstileLoad&render=explicit";
+  script.async = true;
+  document.head.append(script);
+}
+
+function turnstileToken(name) {
+  const id = turnstileWidgets[name];
+  return id === undefined ? "" : window.turnstile.getResponse(id) || "";
+}
+
+// Token je jednorazový: po použití alebo po odmietnutí si widget vypýta nový.
+function resetTurnstile(name) {
+  const id = turnstileWidgets[name];
+  if (id !== undefined) window.turnstile.reset(id);
+}
+
 // ---------- pomocné ----------
 
 async function api(path, body = null, method = "POST") {
@@ -346,6 +378,7 @@ async function fetchEnrollPhrase() {
     username: enrollState.username,
     password: enrollState.password,
     password_confirm: enrollState.passwordConfirm,
+    turnstile: turnstileToken("enroll"),
   });
   enrollState.userId = data.user_id;
   enrollState.challenge = data.challenge;
@@ -386,6 +419,7 @@ async function startEnrollment() {
     showMessage("enrollMessage", error.message, "error");
     enrollState = null;
   }
+  resetTurnstile("enroll");
 }
 
 async function sendEnrollment(events) {
@@ -440,7 +474,7 @@ let verifyFlow;
 let verifyState = null;
 
 async function fetchVerifyPhrase() {
-  const data = await api("/api/verification/begin", { username: verifyState.username });
+  const data = await api("/api/verification/begin", { username: verifyState.username, turnstile: turnstileToken("verify") });
   verifyState.challenge = data.challenge;
   return data.phrase;
 }
@@ -483,6 +517,7 @@ async function startVerification() {
   } catch (error) {
     showMessage("verifyMessage", error.message, "error");
   }
+  resetTurnstile("verify");
 }
 
 async function submitVerification(events) {
@@ -658,6 +693,7 @@ function setup() {
     $("configPill").textContent = `${boot.metric} · k = ${boot.k}`;
     $("testModeRow").hidden = !boot.test_mode_allowed;
     buildFlows();
+    setupTurnstile();
     $("enrollCounter").textContent = `0 / ${boot.min_enrollment}`;
     $("enrollTarget").innerHTML = [boot.min_enrollment, Math.round((boot.min_enrollment + boot.max_enrollment) / 2), boot.max_enrollment]
       .map((n, i) => `<option value="${n}" ${i === 1 ? "selected" : ""}>${n}</option>`).join("");

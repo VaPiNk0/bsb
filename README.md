@@ -221,3 +221,41 @@ Tempo je zmena mediánu času medzi stlačeniami (DD). Stabilita je zmena typick
 - Automatická nová registrácia pri veľkom drifte nie je implementovaná, len odporúčanie.
 - Mesačné obnovy sa dajú vyhodnotiť až z reálnych dát za niekoľko mesiacov. Simulovaný posun času ukazuje mechanizmus, nie skutočný vývoj písania.
 - `evaluate.py` kalibruje z prvých `n` enrollment vzoriek, takže obnovy (`cycle > 0`) výsledky FAR/FRR neovplyvňujú.
+
+## Nasadenie: Cloudflare Pages + Supabase + Python backend
+
+Cloudflare Pages nevie spustiť Flask/numpy, preto je nasadenie rozdelené:
+
+```
+prehliadač ──► Cloudflare Pages (statický web z frontend/ + funkcia pages/functions/api/[[path]].js)
+                      │  /api/*  + hlavičky X-Proxy-Secret, X-Client-IP
+                      ▼
+               Python backend (Render, render.yaml) ──► Supabase Postgres
+```
+
+Prehliadač komunikuje len s doménou Pages (rovnaký pôvod, takže cookies a CSRF fungujú bez CORS). Lokálne spustenie cez `python run.py` sa nemení a ďalej používa SQLite.
+
+**Databáza.** Ak je nastavené `DATABASE_URL`, backend použije Postgres namiesto SQLite a tabuľky si pri štarte vytvorí sám. Na všetkých tabuľkách zapne Row Level Security bez politík: Supabase inak vystavuje schému `public` cez REST API s verejným kľúčom. V Supabase použi connection string *Session pooler* (Connect → Session pooler).
+
+**Ochrana proti botom.**
+- *Cloudflare Turnstile* na registrácii a prihlásení (`TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET`). Token sa overí na backende raz a relácia sa 30 minút považuje za overenú, takže ďalšie vety widget nezdržiava. Bez overenia sa nevytvorí účet ani challenge. Bez kľúčov je kontrola vypnutá (lokálny vývoj).
+- *Backend len cez proxy* (`PROXY_SECRET`): priame požiadavky na adresu backendu dostanú 403, takže bot nemôže obísť Cloudflare. Od proxy sa berie aj skutočná IP klienta pre limit pokusov.
+- K tomu existujúce limity: 15 pokusov/min na IP a účet, zámok účtu po 5 zlyhaniach, jednorazové challenge s platnosťou 90 s.
+
+**Postup.**
+1. Supabase: vytvor projekt, skopíruj connection string (Session pooler).
+2. Cloudflare → Turnstile: pridaj widget pre doménu Pages, získaš site key a secret.
+3. Render: New → Blueprint → tento repozitár (`render.yaml`). Vyplň `DATABASE_URL`, `PROXY_SECRET` (dlhý náhodný reťazec), `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET`.
+4. Pages:
+   ```powershell
+   cd pages
+   node build.mjs
+   npx wrangler pages project create keystroke-2fa --production-branch main
+   npx wrangler pages secret put BACKEND_URL     # https://<služba>.onrender.com
+   npx wrangler pages secret put PROXY_SECRET    # rovnaká hodnota ako na Renderi
+   npx wrangler pages deploy
+   ```
+
+Testy proti Postgresu: `TEST_DATABASE_URL=postgresql://... pytest tests/test_api.py` (tabuľky v danej DB sa zmažú). Bezplatný Render uspáva službu po 15 minútach nečinnosti; prvá požiadavka potom trvá desiatky sekúnd.
+
+**Pozor pri verejnom nasadení:** admin panel vidí každý prihlásený používateľ a registrácia je otvorená. Zobrazuje pokusy všetkých účtov vrátane IP adries.
