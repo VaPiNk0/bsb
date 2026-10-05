@@ -4,6 +4,9 @@ import json
 import math
 import re
 import secrets
+import time
+import urllib.parse
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -38,7 +41,7 @@ from .db import (
 )
 from .drift import analyze_drift, decide_threshold
 from .features import FEATURE_COUNT, extract_features
-from .scoring import build_template, score_vector
+from .scoring import TEMPLATE_VERSION, build_template, score_vector
 from .sentences import next_phrase
 
 
@@ -51,15 +54,53 @@ app.secret_key = settings.SECRET_KEY
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=settings.COOKIE_SECURE,
     MAX_CONTENT_LENGTH=64 * 1024,
 )
 
 init_db()
 
 
+TURNSTILE_VERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+
+
+class HumanCheckFailed(Exception):
+    pass
+
+
+def via_trusted_proxy() -> bool:
+    supplied = request.headers.get("X-Proxy-Secret", "")
+    return bool(settings.PROXY_SECRET) and secrets.compare_digest(supplied, settings.PROXY_SECRET)
+
+
 def client_ip() -> str:
-    # Demo server beží bez reverse proxy; X-Forwarded-For by default never dôverujeme.
+    # Hlavičkám o pôvodnej IP veríme len od vlastnej proxy (preukáže sa tajomstvom); inak by si
+    # ich klient nastavil sám a obišiel limit pokusov.
+    if via_trusted_proxy():
+        return request.headers.get("X-Client-IP") or request.remote_addr or "unknown"
     return request.remote_addr or "unknown"
+
+
+def turnstile_ok(token: str) -> bool:
+    data = urllib.parse.urlencode(
+        {"secret": settings.TURNSTILE_SECRET, "response": token, "remoteip": client_ip()}
+    ).encode()
+    try:
+        with urllib.request.urlopen(TURNSTILE_VERIFY_URL, data=data, timeout=8) as response:
+            return bool(json.load(response).get("success"))
+    except (OSError, ValueError):
+        return False   # keď sa overenie nedá urobiť, nepúšťame
+
+
+def require_human(body: dict) -> None:
+    """Kontrola proti botom: token z Turnstile sa overí raz a relácia si to chvíľu pamätá,
+    takže ďalšie vety tej istej registrácie či prihlásenia už widget nepotrebujú."""
+    if not settings.TURNSTILE_SECRET or session.get("human_until", 0) > time.time():
+        return
+    token = str(body.get("turnstile") or "")
+    if not token or len(token) > 4096 or not turnstile_ok(token):
+        raise HumanCheckFailed("Overenie, že nie si robot, zlyhalo. Skús to znova.")
+    session["human_until"] = time.time() + settings.HUMAN_CHECK_TTL_SECONDS
 
 
 def csrf_token() -> str:
@@ -115,6 +156,37 @@ def refresh_info(user) -> dict:
     }
 
 
+def vectors_of(rows) -> list[list[float | None]]:
+    return [json.loads(row["features_json"]) for row in rows]
+
+
+def make_template(vectors: list[list[float | None]]) -> dict:
+    return build_template(
+        vectors,
+        metric=settings.METRIC,
+        k=settings.K,
+        floor=settings.MAD_FLOOR_MS,
+        z_limit=settings.ROBUST_Z_LIMIT,
+        shrinkage=settings.COV_SHRINKAGE,
+    )
+
+
+def current_template(user) -> dict:
+    """Šablóna používateľa; ak ju vytvorila iná konfigurácia alebo staršia verzia skórovania,
+    prepočíta sa z uložených enrollment vzoriek (posledných MAX_ENROLLMENT)."""
+    template = json.loads(user["template_json"])
+    if (
+        template.get("version") == TEMPLATE_VERSION
+        and template["metric"] == settings.METRIC
+        and float(template["k"]) == settings.K
+    ):
+        return template
+    user_id = int(user["id"])
+    template = make_template(vectors_of(get_enrollment_samples(user_id)[-settings.MAX_ENROLLMENT:]))
+    save_template(user_id, template)
+    return template
+
+
 def session_user():
     if "auth_user_id" not in session:
         raise PermissionError("Najprv sa prihlás.")
@@ -122,6 +194,18 @@ def session_user():
     if not user or not user["template_json"]:
         raise PermissionError("Najprv sa prihlás.")
     return user
+
+
+def is_admin(username: str) -> bool:
+    return not settings.ADMIN_USERS or username in settings.ADMIN_USERS
+
+
+def session_admin():
+    """Prihlásený používateľ s prístupom do admin panela, inak None."""
+    if "auth_user_id" not in session:
+        return None
+    user = get_user(int(session["auth_user_id"]))
+    return user if user and is_admin(user["username"]) else None
 
 
 def verify_rate_limit(username: str) -> None:
@@ -186,13 +270,25 @@ def store_attempt(
     )
 
 
+@app.before_request
+def only_through_proxy():
+    if settings.PROXY_SECRET and request.path != "/api/health" and not via_trusted_proxy():
+        return jsonify(error="Neautorizované"), 403
+
+
+@app.errorhandler(HumanCheckFailed)
+def human_check_failed(exc):
+    return jsonify(error=str(exc), captcha=True), 403
+
+
 @app.after_request
 def security_headers(response):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Content-Security-Policy"] = (
-        "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; "
+        "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'; "
+        "connect-src 'self'; frame-src https://challenges.cloudflare.com; "
         "img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
     )
     return response
@@ -206,7 +302,7 @@ def index():
 
 @app.get("/admin")
 def admin_page():
-    if "auth_user_id" not in session:
+    if not session_admin():
         return redirect(url_for("index"))
     return send_from_directory(FRONTEND, "admin.html")
 
@@ -223,11 +319,13 @@ def bootstrap():
         csrf=token,
         feature_count=FEATURE_COUNT,
         max_corrections=settings.MAX_CORRECTIONS,
+        challenge_ttl=settings.CHALLENGE_TTL_SECONDS,
         min_enrollment=settings.MIN_ENROLLMENT,
         max_enrollment=settings.MAX_ENROLLMENT,
         metric=settings.METRIC,
         k=settings.K,
         test_mode_allowed=settings.ALLOW_TEST_MODE,
+        turnstile_site_key=settings.TURNSTILE_SITE_KEY if settings.TURNSTILE_SECRET else "",
     )
 
 
@@ -243,16 +341,20 @@ def enrollment_begin():
             raise ValueError("Heslo musí mať aspoň 10 znakov")
         if password != confirm:
             raise ValueError("Heslá sa nezhodujú")
+        require_human(body)
 
         user = get_user_by_username(username)
         if user:
             if user["template_json"]:
                 return jsonify(error="Používateľ už má vytvorenú šablónu."), 409
-            if not check_password_hash(user["password_hash"], password):
-                return jsonify(error="Používateľ existuje, ale heslo nesedí."), 409
             user_id = int(user["id"])
+            # Heslo sa pri registrácii overuje raz; ďalšie vety tej istej relácie už scrypt
+            # nepočítajú znova (inak ~0,3 s navyše pred každou vetou).
+            if session.get("enroll_user_id") != user_id and not check_password_hash(user["password_hash"], password):
+                return jsonify(error="Používateľ existuje, ale heslo nesedí."), 409
         else:
             user_id = create_user(username, generate_password_hash(password))
+        session["enroll_user_id"] = user_id
         token, challenge_id, phrase = make_challenge(user_id, "enrollment")
         count = len(get_enrollment_samples(user_id))
         return jsonify(
@@ -283,9 +385,10 @@ def enrollment_sample():
             raise ValueError("Challenge je neplatný alebo expirovaný")
         features = extract_features(body.get("events", []), challenge["phrase"], settings.MAX_CORRECTIONS)
         digest = feature_hash(features)
-        if any(row["feature_hash"] == digest for row in get_enrollment_samples(user_id)):
+        samples = get_enrollment_samples(user_id)
+        if any(row["feature_hash"] == digest for row in samples):
             return jsonify(error="Identická enrollment vzorka bola už použitá. Zopakuj ju."), 409
-        existing = len(get_enrollment_samples(user_id))
+        existing = len(samples)
         if existing >= settings.MAX_ENROLLMENT:
             return jsonify(error="Maximum enrollment vzoriek už bolo dosiahnuté."), 409
         add_enrollment_sample(user_id, existing + 1, features, challenge["phrase"])
@@ -305,17 +408,10 @@ def enrollment_finish():
         samples = get_enrollment_samples(user_id)
         if len(samples) < settings.MIN_ENROLLMENT:
             return jsonify(error=f"Potrebných je aspoň {settings.MIN_ENROLLMENT} vzoriek."), 400
-        vectors = [json.loads(row["features_json"]) for row in samples]
-        template = build_template(
-            vectors,
-            metric=settings.METRIC,
-            k=settings.K,
-            floor=settings.MAD_FLOOR_MS,
-            z_limit=settings.ROBUST_Z_LIMIT,
-            shrinkage=settings.COV_SHRINKAGE,
-        )
+        template = make_template(vectors_of(samples))
         save_template(user_id, template)
         stamp_template(user_id, 0)
+        session.pop("enroll_user_id", None)
         return jsonify(ok=True, count=len(samples), threshold=template["threshold"], metric=settings.METRIC)
     except (ValueError, TypeError) as exc:
         return jsonify(error=str(exc)), 400
@@ -327,6 +423,7 @@ def verification_begin():
         require_csrf()
         body = json_body()
         username = validate_username(body.get("username", ""))
+        require_human(body)
         user = get_user_by_username(username)
         verify_rate_limit(username)
         if not user or not user["template_json"]:
@@ -404,8 +501,9 @@ def verification():
 
         if not user["template_json"]:
             return jsonify(error="Autentifikácia zlyhala."), 401
-        template = json.loads(user["template_json"])
+        template = current_template(user)
         metric = settings.METRIC
+        threshold = float(template["threshold"])
         score = score_vector(features, template, metric=metric)
         if not math.isfinite(score):
             store_attempt(
@@ -415,22 +513,6 @@ def verification():
                 phrase=phrase,
             )
             return jsonify(error="Veta obsahovala príliš málo použiteľných kláves. Skús znova s novou vetou."), 400
-        threshold = float(template["threshold"]) if template["metric"] == metric and float(template["k"]) == settings.K else None
-        if threshold is None:
-            # Konfigurácia bola zmenená; šablónu prepočítame z uložených enrollment vzoriek.
-            samples = get_enrollment_samples(user_id)
-            vectors = [json.loads(row["features_json"]) for row in samples]
-            template = build_template(
-                vectors,
-                metric=metric,
-                k=settings.K,
-                floor=settings.MAD_FLOOR_MS,
-                z_limit=settings.ROBUST_Z_LIMIT,
-                shrinkage=settings.COV_SHRINKAGE,
-            )
-            save_template(user_id, template)
-            threshold = float(template["threshold"])
-            score = score_vector(features, template, metric=metric)
 
         accepted = score <= threshold
         store_attempt(
@@ -444,11 +526,13 @@ def verification():
 
         # Adaptácia len pri genuine úspechu; test/impostor výsledok šablónu nemení.
         if accepted and settings.ADAPTIVE_TEMPLATE and attempt_type == "genuine" and actor == username:
-            center = template["center"]
             alpha = settings.ADAPTIVE_ALPHA
+            center = template["center"]
+            # príznak, ktorý vo vete nebol (alebo ho šablóna nepozná), sa nemení
             template["center"] = [
-                (1 - alpha) * float(c) + alpha * float(x) for c, x in zip(center, features)
-            ]
+                c if c is None or x is None else (1 - alpha) * float(c) + alpha * float(x)
+                for c, x in zip(center, features)
+            ] + center[len(features):]
             save_template(user_id, template)
 
         if accepted:
@@ -461,6 +545,7 @@ def verification():
             threshold=round(threshold, 6),
             metric=metric,
             test_mode=test_mode,
+            is_admin=accepted and is_admin(username),
             refresh=refresh_info(get_user(user_id)) if accepted else None,
         ), (200 if accepted else 401)
     except PermissionError as exc:
@@ -471,12 +556,9 @@ def verification():
 
 @app.get("/api/admin/overview")
 def admin_overview():
-    if "auth_user_id" not in session:
-        return jsonify(error="Neautorizované"), 401
-    current = get_user(int(session["auth_user_id"]))
+    current = session_admin()
     if not current:
-        session.clear()
-        return jsonify(error="Relácia skončila"), 401
+        return jsonify(error="Neautorizované"), 401 if "auth_user_id" not in session else 403
     users = []
     for row in list_users():
         item = dict(row)
@@ -541,7 +623,7 @@ def refresh_sample():
         if digest in known:
             return jsonify(error="Identická vzorka bola už použitá. Zopakuj ju."), 409
 
-        template = json.loads(user["template_json"])
+        template = current_template(user)
         score = score_vector(features, template)
         threshold = float(template["threshold"])
         # ochrana pred otrávením šablóny: vzorka musí byť rozumne blízko aktuálnej šablóne
@@ -570,22 +652,18 @@ def refresh_finish():
         if len(pending) < settings.REFRESH_SAMPLES:
             raise ValueError(f"Potrebných je aspoň {settings.REFRESH_SAMPLES} vzoriek.")
 
-        old_template = json.loads(user["template_json"])
+        old_template = current_template(user)
         existing = get_enrollment_samples(user_id)
-        old_window = [json.loads(r["features_json"]) for r in existing[-settings.MAX_ENROLLMENT:]]
-        new_vectors = [json.loads(r["features_json"]) for r in pending]
+        old_window = vectors_of(existing[-settings.MAX_ENROLLMENT:])
+        new_vectors = vectors_of(pending)
 
         report = analyze_drift(old_window, new_vectors, old_template)
 
         # nové vzorky sa pridajú k tým pôvodným; šablóna sa počíta z posledných MAX_ENROLLMENT
         next_index = (int(existing[-1]["sample_index"]) if existing else 0) + 1
-        for offset, row in enumerate(pending):
-            add_enrollment_sample(user_id, next_index + offset, json.loads(row["features_json"]), row["phrase"], cycle)
-        window = [json.loads(r["features_json"]) for r in get_enrollment_samples(user_id)[-settings.MAX_ENROLLMENT:]]
-        new_template = build_template(
-            window, metric=settings.METRIC, k=settings.K, floor=settings.MAD_FLOOR_MS,
-            z_limit=settings.ROBUST_Z_LIMIT, shrinkage=settings.COV_SHRINKAGE,
-        )
+        for offset, (row, vector) in enumerate(zip(pending, new_vectors)):
+            add_enrollment_sample(user_id, next_index + offset, vector, row["phrase"], cycle)
+        new_template = make_template((old_window + new_vectors)[-settings.MAX_ENROLLMENT:])
         old_threshold = float(old_template["threshold"])
         threshold, capped = decide_threshold(
             old_threshold, float(new_template["threshold"]),
@@ -615,8 +693,8 @@ def admin_age_template():
     """Len v test mode: simuluje ubehnutie času, aby sa dala predviesť mesačná obnova."""
     if not settings.ALLOW_TEST_MODE:
         return jsonify(error="Dostupné len v test mode."), 403
-    if "auth_user_id" not in session:
-        return jsonify(error="Neautorizované"), 401
+    if not session_admin():
+        return jsonify(error="Neautorizované"), 401 if "auth_user_id" not in session else 403
     try:
         require_csrf()
         body = json_body()

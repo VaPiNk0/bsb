@@ -17,19 +17,21 @@ Semestrálny projekt: behaviorálna biometrická autentifikácia podľa dynamiky
 
 **Vety:** každý challenge dostane novú vetu (35–55 znakov, malé písmená a-z a medzera). Vety generuje `backend/sentences.py`: ak je nastavený `LLM_URL`, použije sa lokálny LLM cez OpenAI-kompatibilné API (Ollama, LM Studio, llama.cpp, vLLM) a viety sa predgenerujú do zásobníka na pozadí; inak (alebo keď LLM neodpovie) sa použije offline šablónový generátor. Vetu si drží server, takže ju klient nemôže zmeniť. Keďže znaky sa porovnávajú podľa `event.key`, funguje to rovnako na QWERTY aj QWERTZ.
 
-**Príznaky:** vektor nie je viazaný na pozíciu znaku, ale na klávesu a dvojicu znakov: 27 dwell (a–z a medzera) + 44 DD pre frekventované bigramy + 5 globálnych (medián dwell/DD/UD, 90. percentil DD, % rollover) = **76 rozmerov**. Čo veta neobsahuje, je `null` a pri skórovaní sa preskočí (skóre sa počíta len cez príznaky, ktoré šablóna pozná aspoň z 3 vzoriek a ktoré sa v pokuse vyskytli; minimum 15).
+**Príznaky:** vektor nie je viazaný na pozíciu znaku, ale na klávesu a dvojicu znakov: 27 dwell (a–z a medzera) + 44 DD pre frekventované bigramy + 16 globálnych (medián dwell/DD/UD, 90. percentil DD, % rollover a kvartily a chvosty rozloženia dwell/DD/UD: p10, p25, p75, p90) = **87 rozmerov**. Globálne príznaky sa počítajú zo všetkých stlačení vo vete, preto sú najmenej zašumené; 11 príznakov rozloženia pribudlo vo verzii šablóny 4 a na benchmarku nižšie samy znížili EER asi o 1 percentuálny bod. Vzorky uložené staršou verziou majú 76 hodnôt a chýbajúci koniec sa berie ako nepozorovaný, takže fungujú ďalej; nové príznaky sa do šablóny dostanú novou registráciou alebo mesačnou obnovou. Čo veta neobsahuje, je `null` a pri skórovaní sa preskočí (skóre sa počíta len cez príznaky, ktoré šablóna pozná aspoň z 2 vzoriek a ktoré sa v pokuse vyskytli; minimum 15).
 
 **MAD namiesto σ:** per-feature scale používa `1.4826 × MAD`, s minimom 5 ms. MAD je pri malom datasete robustnejší voči jednotlivým výkyvom než obyčajná smerodajná odchýlka.
 
 **Robustné odstránenie outlierov:** vzorky sa najprv ohodnotia robustným odklonom od mediánu; extrémne riadky sa vyradia iba vtedy, keď ostane aspoň polovica dát. Pri malom datasete je lepšie byť konzervatívny.
 
-**k = 2.0:** ide o rozumný počiatočný kompromis medzi toleranciou prirodzeného intra-user rozptylu a nízkym FAR. V evaluácii sa však k sweepuje, pretože bezpečnostne kritický admin systém nemá byť obhajovaný iba jednou arbitrárnou hodnotou.
+**Shrinkage škály a orezanie z:** príznak videný len v 2–5 vetách má MAD veľmi nepresnú (často náhodne skoro nulovú), takže jediný bigram vedel dať |z| ≈ 5–10. To nafukovalo rozptyl genuine skóre, a tým aj prah. Preto sa škála každého príznaku ťahá k typickej relatívnej škále dobre pozorovaných príznakov (váha 4 pozorovania) a |z| jedného príznaku sa orezáva na 3. Na podvzorke verejného datasetu Aalto 136M Keystrokes (587 ľudí, 10 viet enrollment, zvyšné vety genuine, 40 cudzích viet na účet) to znížilo EER z ~18 % na ~10,5 % a FAR pri k = 2 zo 42 % na 20 %.
+
+**k = 1.5:** na tom istom benchmarku (polovica ľudí odložená, na druhej sa ladilo; čísla sú z odloženej) dáva aktuálna verzia pri jednom pokuse k = 0.75 FRR 19 % / FAR 4 %, k = 1 FRR 15 % / FAR 6 %, k = 1.5 FRR 8 % / FAR 9 %, k = 2 FRR 5 % / FAR 13,5 %; EER 8,8 % (predtým 10,1 %). Po zamietnutí však appka hneď ponúkne novú vetu, takže rozhoduje, čo sa stane v priebehu niekoľkých pokusov: do 3 pokusov je to pri k = 1 FRR 0,3 % / FAR 11 %, pri k = 1.5 FRR 0,1 % / FAR 16 % (pôvodná verzia s k = 1.5: FRR 0,6 % / FAR 21 %). Opakovanie pomáha pravému používateľovi oveľa viac než cudziemu (jeho pokusy sú zlé konzistentne). Benchmark je však písaný v jednom sedení; pri prihlásení v iný deň než registrácia vychádzajú skóre pravého používateľa vyššie než LOO odhad, a k = 1 ho v praxi zamietalo príliš často. Default je preto 1.5; pre prísnejší systém nastav `K=1.0`, pre menej zamietnutí `K=2.0`. V evaluácii sa k sweepuje, pretože bezpečnostne kritický admin systém nemá byť obhajovaný iba jednou arbitrárnou hodnotou. Čísla sú z cudzieho datasetu (anglické vety, každý účastník na vlastnej klávesnici), takže sú orientačné; vlastné meranie rob cez `evaluate.py`.
 
 **Mahalanobis:** používa sa na porovnanie. Kovariancia z-skóre sa shrinkuje k identite; pri skórovaní sa berie len podmatica pre pozorované príznaky a výsledok sa delí počtom príznakov, aby boli skóre porovnateľné medzi vetami.
 
 **Enrollment 12–20:** default UI je 16 (stred rozsahu), minimum je 12, lebo pri meniacom sa texte treba viac vzoriek. Každá vzorka je iná veta. Dáta sa držia jednotlivo v DB, takže `evaluate.py` vie simulovať rôzny počet vzoriek bez opätovného zberu (prepíš `DEFAULT_ENROLLMENT_COUNTS` na hodnoty ≥ 12).
 
-**Prah:** každý enrollment sample sa skóruje voči šablóne z ostatných vzoriek (leave-one-out); výsledkom je `mean + k·std`. Tým sa prah neodvodzuje z rovnakého self-match, čo by ho príliš optimisticky znižovalo.
+**Prah:** každý enrollment sample sa skóruje voči šablóne z ostatných vzoriek (leave-one-out); výsledkom je `mean + k·std`. Tým sa prah neodvodzuje z rovnakého self-match, čo by ho príliš optimisticky znižovalo. Smerodajná odchýlka z 12–20 LOO skóre je sama nepresná (niekto by dostal náhodou voľný prah, iný prísny), preto sa ťahá k typickému pomeru std/mean = 0,16 s váhou 10 pozorovaní (`calibrate_threshold` v `scoring.py`).
 
 ## Bezpečnostný model
 
@@ -88,7 +90,7 @@ Databáza sa vytvorí automaticky v `data/keystroke.db`.
 
 ```text
 METRIC=manhattan|mahalanobis
-K=2.0
+K=1.5
 ADAPTIVE_TEMPLATE=0|1
 ALLOW_TEST_MODE=0
 ENFORCE_LOCKOUT_IN_TEST_MODE=0
@@ -103,8 +105,8 @@ $env:METRIC="mahalanobis"; $env:K="2.5"; python run.py
 ## Demo scenár na obhajobu
 
 1. Zaregistruj `admin01` s testovacím heslom dlhým aspoň 10 znakov.
-2. Prepíš zobrazené vety (každá je iná). Preklepy oprav Backspace-om (max. 15 opráv na vetu); Shift, Caps Lock a paste pokus zneplatnia.
-3. Na login ukáž genuine pokus → výsledok, skóre a prah.
+2. Prepíš zobrazené vety (každá je iná). Preklepy oprav Backspace-om (max. 15 opráv na vetu); Shift, Caps Lock a paste pokus zneplatnia a appka sama ponúkne novú vetu.
+3. Na login ukáž genuine pokus → po poslednom znaku sa vyhodnotí sám, zobrazí výsledok, skóre a prah. Po zamietnutí príde automaticky nová veta (nový challenge).
 4. Zapni Testovací mód. Ako tester zvoľ napr. `P02`, cieľ `admin01`, typ `impostor` a prepíš zobrazenú vetu vlastným štýlom.
 5. Pre imitáciu zvoľ `imitacia` a nechaj testera vedome spomaľovať/rýchliť rytmus podľa cieľového používateľa.
 6. Pri úspešnom genuine login otvor admin panel a ukáž audit log.
@@ -169,6 +171,9 @@ pytest -q
 - **Rollover kláves**: záporné UD (ďalšia klávesa stlačená pred uvoľnením predošlej) je už povolené; pribudli horné limity na dwell/DD a test.
 - **Test mode** je defaultne vypnutý (pozri vyššie).
 - **Bez enumerácie používateľov**: `/api/verification/begin` vracia rovnakú odpoveď pre neexistujúci účet aj účet bez šablóny; zamknutie sa odhalí len pri správnom hesle.
+- **Presnejšie časovanie**: frontend berie čas klávesy z `event.timeStamp`, nie z `performance.now()` v handleri, takže prekresľovanie UI neskresľuje dwell/DD.
+- **Presnejšie rozpoznanie** (verzia šablóny 4): 11 nových príznakov rozloženia časov, stabilnejší prah; kovariancia sa ukladá len pre Mahalanobis (šablóna má ~2 kB namiesto ~90 kB).
+- **Robustnejšie skórovanie** (verzia šablóny 3): shrinkage škály, orezanie |z|. Staršie šablóny sa pri najbližšom prihlásení automaticky prepočítajú z uložených enrollment vzoriek.
 - **Nový frontend**: živý graf rytmu písania (dwell/DD pre každú klávesu), segmentovaný postup registrácie, ukazovateľ skóre voči prahu a v admin paneli graf skóre/prah všetkých pokusov.
 
 ## Generátor viet a lokálny LLM
@@ -216,3 +221,41 @@ Tempo je zmena mediánu času medzi stlačeniami (DD). Stabilita je zmena typick
 - Automatická nová registrácia pri veľkom drifte nie je implementovaná, len odporúčanie.
 - Mesačné obnovy sa dajú vyhodnotiť až z reálnych dát za niekoľko mesiacov. Simulovaný posun času ukazuje mechanizmus, nie skutočný vývoj písania.
 - `evaluate.py` kalibruje z prvých `n` enrollment vzoriek, takže obnovy (`cycle > 0`) výsledky FAR/FRR neovplyvňujú.
+
+## Nasadenie: Cloudflare Pages + Supabase + Python backend
+
+Cloudflare Pages nevie spustiť Flask/numpy, preto je nasadenie rozdelené:
+
+```
+prehliadač ──► Cloudflare Pages (statický web z frontend/ + funkcia pages/functions/api/[[path]].js)
+                      │  /api/*  + hlavičky X-Proxy-Secret, X-Client-IP
+                      ▼
+               Python backend (Render, render.yaml) ──► Supabase Postgres
+```
+
+Prehliadač komunikuje len s doménou Pages (rovnaký pôvod, takže cookies a CSRF fungujú bez CORS). Lokálne spustenie cez `python run.py` sa nemení a ďalej používa SQLite.
+
+**Databáza.** Ak je nastavené `DATABASE_URL`, backend použije Postgres namiesto SQLite a tabuľky si pri štarte vytvorí sám. Na všetkých tabuľkách zapne Row Level Security bez politík: Supabase inak vystavuje schému `public` cez REST API s verejným kľúčom. V Supabase použi connection string *Session pooler* (Connect → Session pooler).
+
+**Ochrana proti botom.**
+- *Cloudflare Turnstile* na registrácii a prihlásení (`TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET`). Token sa overí na backende raz a relácia sa 30 minút považuje za overenú, takže ďalšie vety widget nezdržiava. Bez overenia sa nevytvorí účet ani challenge. Bez kľúčov je kontrola vypnutá (lokálny vývoj).
+- *Backend len cez proxy* (`PROXY_SECRET`): priame požiadavky na adresu backendu dostanú 403, takže bot nemôže obísť Cloudflare. Od proxy sa berie aj skutočná IP klienta pre limit pokusov.
+- K tomu existujúce limity: 15 pokusov/min na IP a účet, zámok účtu po 5 zlyhaniach, jednorazové challenge s platnosťou 90 s.
+
+**Postup.**
+1. Supabase: vytvor projekt, skopíruj connection string (Session pooler).
+2. Cloudflare → Turnstile: pridaj widget pre doménu Pages, získaš site key a secret.
+3. Render: New → Blueprint → tento repozitár (`render.yaml`). Vyplň `DATABASE_URL`, `PROXY_SECRET` (dlhý náhodný reťazec), `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET`.
+4. Pages:
+   ```powershell
+   cd pages
+   node build.mjs
+   npx wrangler pages project create keystroke-2fa --production-branch main
+   npx wrangler pages secret put BACKEND_URL     # https://<služba>.onrender.com
+   npx wrangler pages secret put PROXY_SECRET    # rovnaká hodnota ako na Renderi
+   npx wrangler pages deploy
+   ```
+
+Testy proti Postgresu: `TEST_DATABASE_URL=postgresql://... pytest tests/test_api.py` (tabuľky v danej DB sa zmažú). Bezplatný Render uspáva službu po 15 minútach nečinnosti; prvá požiadavka potom trvá desiatky sekúnd.
+
+**Admin panel.** `ADMIN_USERS` (mená oddelené čiarkou) určuje, ktoré účty smú do admin panela; ostatní prihlásení používatelia dostanú 403 a odkaz na panel sa im nezobrazí. Lokálne je premenná prázdna a panel vidí každý prihlásený používateľ. Registrácia je otvorená a meno účtu si môže zabrať ktokoľvek, preto si admin účet zaregistruj hneď po nasadení.

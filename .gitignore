@@ -9,3 +9,7 @@ data/*.db-shm
 data/*.db-wal
 results/*.png
 results/*.csv
+pages/dist/
+pages/node_modules/
+pages/.wrangler/
+node_modules/

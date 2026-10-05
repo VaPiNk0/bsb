@@ -58,9 +58,9 @@
             <option value="12">12</option>
           </select>
         </label>
+        <div class="full" id="enrollTurnstile" hidden></div>
         <div class="form-actions full">
           <button class="primary" type="submit">Začať registráciu</button>
-          <button class="secondary" id="enrollCancel" type="button" hidden>Zrušiť</button>
         </div>
       </form>
 
@@ -69,17 +69,17 @@
           <div><span class="muted">Používateľ</span> <strong id="enrollActiveUser">—</strong></div>
           <div><span class="muted">Vzorka</span> <strong id="enrollSampleNo">—</strong></div>
         </div>
-        <div class="phrase" id="enrollPhrase">—</div>
-        <div class="typing-area" id="enrollTyping" tabindex="0" role="textbox" aria-label="Plocha pre prepis vety"></div>
+        <div class="typing-area" id="enrollTyping" tabindex="0" role="textbox" aria-label="Plocha pre prepis vety" data-placeholder="Klikni sem a píš"></div>
         <div class="rhythm-wrap">
           <div class="rhythm-legend"><span><i class="k-dwell"></i>držanie klávesy (dwell)</span><span><i class="k-dd"></i>čas medzi stlačeniami (DD)</span><em id="enrollTempo">—</em></div>
           <div class="rhythm" id="enrollRhythm" aria-label="Živý graf rytmu písania"></div>
         </div>
-        <div class="capture-help" id="enrollHelp">Prepíš vetu malými písmenami bez diakritiky. Preklepy oprav Backspace-om, Shift a paste pokus zneplatnia.</div>
+        <div class="capture-status" id="enrollHelp" data-base="capture-status" role="status" aria-live="polite"></div>
         <div class="segments" id="enrollProgress" aria-label="Postup registrácie"></div>
         <div class="form-actions">
-          <button class="secondary" id="enrollRepeat" type="button">Opakovať aktuálnu vzorku</button>
+          <button class="secondary" id="enrollSkip" type="button">Iná veta</button>
           <button class="primary" id="enrollFinish" type="button" disabled>Dokončiť registráciu</button>
+          <button class="ghost" id="enrollCancel" type="button">Zrušiť</button>
         </div>
       </div>
       <div class="message" id="enrollMessage"></div>
@@ -89,7 +89,7 @@
       <div class="panel-header">
         <div>
           <h2>Prihlásenie</h2>
-          <p>Prihlásenie: najprv heslo, potom jeden behaviorálny vzor.</p>
+          <p>Najprv heslo, potom jedna veta. Ak rytmus nesedí, dostaneš hneď novú.</p>
         </div>
         <label class="switch-row" id="testModeRow" hidden><input id="testMode" type="checkbox"> Testovací mód</label>
       </div>
@@ -118,26 +118,25 @@
         <div class="consent-line full">
           <label class="checkbox-label"><input id="verifyConsent" type="checkbox" required> Súhlasím so spracovaním biometrických časových príznakov pre tento školský experiment.</label>
         </div>
+        <div class="full" id="verifyTurnstile" hidden></div>
         <div class="form-actions full">
-          <button class="primary" type="submit">Pokračovať na písanie</button>
+          <button class="primary" type="submit">Pokračovať</button>
         </div>
       </form>
 
       <div id="verifyCapture" class="capture-box" hidden>
         <div class="capture-meta">
           <div><span class="muted">Účet</span> <strong id="verifyActiveUser">—</strong></div>
-          <div><span class="muted">Challenge</span> <strong id="verifyChallengeStatus">aktívny</strong></div>
+          <button class="ghost" id="verifyBack" type="button">Zmeniť údaje</button>
         </div>
-        <div class="phrase" id="verifyPhrase">—</div>
-        <div class="typing-area" id="verifyTyping" tabindex="0" role="textbox" aria-label="Plocha pre prepis vety"></div>
+        <div class="typing-area" id="verifyTyping" tabindex="0" role="textbox" aria-label="Plocha pre prepis vety" data-placeholder="Klikni sem a píš"></div>
         <div class="rhythm-wrap">
           <div class="rhythm-legend"><span><i class="k-dwell"></i>držanie klávesy (dwell)</span><span><i class="k-dd"></i>čas medzi stlačeniami (DD)</span><em id="verifyTempo">—</em></div>
           <div class="rhythm" id="verifyRhythm" aria-label="Živý graf rytmu písania"></div>
         </div>
-        <div class="capture-help" id="verifyHelp">Prepíš vetu. Časovanie sa zaznamenáva iba počas tohto pokusu, opravy Backspace-om sú povolené.</div>
+        <div class="capture-status" id="verifyHelp" data-base="capture-status" role="status" aria-live="polite"></div>
         <div class="form-actions">
-          <button class="secondary" id="verifyRepeat" type="button">Opakovať</button>
-          <button class="primary" id="verifySubmit" type="button" disabled>Vyhodnotiť pokus</button>
+          <button class="secondary" id="verifyNew" type="button">Iná veta</button>
         </div>
       </div>
 
@@ -154,7 +153,7 @@
         </div>
         <a id="adminLink" class="primary button-link" href="/admin" hidden>Otvoriť admin panel</a>
       </div>
-      <div class="message" id="verifyMessage"></div>
+      <div class="message" id="verifyMessage" role="status" aria-live="polite"></div>
 
       <div id="refreshCard" class="refresh-card" hidden>
         <div class="refresh-head">
@@ -173,12 +172,12 @@
             <div class="muted">Odmietnutá vzorka sa nepočíta, napíš ďalšiu.</div>
           </div>
           <div class="segments" id="refreshProgress" aria-label="Postup obnovy"></div>
-          <div class="phrase" id="refreshPhrase">—</div>
-          <div class="typing-area" id="refreshTyping" tabindex="0" role="textbox" aria-label="Plocha pre prepis vety"></div>
+          <div class="typing-area" id="refreshTyping" tabindex="0" role="textbox" aria-label="Plocha pre prepis vety" data-placeholder="Klikni sem a píš"></div>
           <div class="rhythm-wrap">
           <div class="rhythm-legend"><span><i class="k-dwell"></i>držanie klávesy (dwell)</span><span><i class="k-dd"></i>čas medzi stlačeniami (DD)</span><em id="refreshTempo">—</em></div>
           <div class="rhythm" id="refreshRhythm" aria-label="Živý graf rytmu písania"></div>
         </div>
+          <div class="capture-status" id="refreshHelp" data-base="capture-status" role="status" aria-live="polite"></div>
         </div>
         <div id="refreshReport" class="report" hidden>
           <div class="report-head"><span class="badge" id="reportBadge">—</span><strong id="reportTitle">—</strong></div>

@@ -1,0 +1,26 @@
+# Render Blueprint: Python backend. Frontend a proxy /api sú na Cloudflare Pages (priečinok pages/).
+services:
+  - type: web
+    name: keystroke-2fa-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements-prod.txt
+    startCommand: gunicorn backend.app:app --workers 1 --threads 4 --timeout 60 --bind 0.0.0.0:$PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.10
+      - key: COOKIE_SECURE
+        value: "1"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ADMIN_USERS       # účty s prístupom do admin panela, oddelené čiarkou
+        value: Tomas
+      - key: DATABASE_URL      # Supabase: Connect -> Session pooler
+        sync: false
+      - key: PROXY_SECRET      # rovnaká hodnota ako v Cloudflare Pages
+        sync: false
+      - key: TURNSTILE_SITE_KEY
+        sync: false
+      - key: TURNSTILE_SECRET
+        sync: false

@@ -33,7 +33,9 @@ class Settings:
 
     # Manhattan je primárny; Mahalanobis sa dá prepnúť cez METRIC.
     METRIC: str = os.getenv("METRIC", "manhattan").lower()
-    K: float = float(os.getenv("K", "2.0"))
+    # k = 1.0 vychádza na benchmarku bezpečnejšie, ale v reálnom používaní (prihlásenie v iný deň
+    # než registrácia) sú genuine skóre vyššie než LOO odhad a pravý používateľ býval zamietaný.
+    K: float = float(os.getenv("K", "1.5"))
     MAD_FLOOR_MS: float = float(os.getenv("MAD_FLOOR_MS", "5.0"))
     ROBUST_Z_LIMIT: float = float(os.getenv("ROBUST_Z_LIMIT", "3.5"))
     COV_SHRINKAGE: float = float(os.getenv("COV_SHRINKAGE", "0.15"))
@@ -55,8 +57,24 @@ class Settings:
     ADAPTIVE_TEMPLATE: bool = os.getenv("ADAPTIVE_TEMPLATE", "0") == "1"
     ADAPTIVE_ALPHA: float = float(os.getenv("ADAPTIVE_ALPHA", "0.05"))
 
+    # Nasadenie. Cloudflare Turnstile chráni registráciu a prihlásenie pred botmi; bez kľúčov je vypnutý.
+    TURNSTILE_SITE_KEY: str = os.getenv("TURNSTILE_SITE_KEY", "")
+    TURNSTILE_SECRET: str = os.getenv("TURNSTILE_SECRET", "")
+    HUMAN_CHECK_TTL_SECONDS: int = int(os.getenv("HUMAN_CHECK_TTL_SECONDS", "1800"))
+    # Tajomstvo, ktorým sa backendu preukazuje proxy na Cloudflare Pages. Ak je nastavené, /api
+    # odpovedá len cez proxy a skutočná IP klienta sa berie z jej hlavičky.
+    PROXY_SECRET: str = os.getenv("PROXY_SECRET", "")
+    COOKIE_SECURE: bool = os.getenv("COOKIE_SECURE", "0") == "1"
+    # Účty (oddelené čiarkou), ktoré smú do admin panela. Prázdne = každý prihlásený používateľ,
+    # čo stačí na lokálne demo; pri verejnom nasadení s otvorenou registráciou to treba nastaviť.
+    ADMIN_USERS: frozenset = frozenset(
+        name.strip() for name in os.getenv("ADMIN_USERS", "").split(",") if name.strip()
+    )
+
     SECRET_KEY: str = os.getenv("SECRET_KEY") or secrets.token_hex(32)
     DB_PATH: str = os.getenv("DB_PATH", str(PROJECT_ROOT / "data" / "keystroke.db"))
+    # Postgres (Supabase) connection string; ak je nastavený, použije sa namiesto SQLite súboru.
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "")
 
     def validate(self) -> None:
         if not (0.0 <= self.K <= 10.0):

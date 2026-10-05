@@ -13,12 +13,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.stats import norm
 
-from backend.scoring import compute_loo_scores, fit_stats, score_with_stats
+from backend.config import settings
+from backend.scoring import calibrate_threshold, compute_loo_scores, fit_stats, score_with_stats, to_matrix
 
 
 DEFAULT_METRICS = ["manhattan", "mahalanobis"]
 DEFAULT_ENROLLMENT_COUNTS = [5, 10, 15]
-DEFAULT_KS = [1.0, 1.5, 2.0, 2.5, 3.0]
+DEFAULT_KS = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
 
 
 def load_data(db_path: str):
@@ -55,18 +56,14 @@ def attempts_to_matrix(attempts):
 
 
 def fit_user(vectors, metric):
-    matrix = np.asarray(vectors, dtype=float)
-    stats = fit_stats(matrix)
+    matrix = to_matrix(vectors)
+    stats = fit_stats(matrix, with_cov=metric == "mahalanobis")
     loo = compute_loo_scores(matrix, metric)
     return stats, loo
 
 
 def threshold_from_calibration(calibration, k):
-    loo = calibration[1]
-    mean = float(np.mean(loo))
-    std = float(np.std(loo, ddof=1)) if loo.size > 1 else 0.0
-    std = max(std, max(mean * 0.02, 1e-6))
-    return mean + float(k) * std
+    return calibrate_threshold(calibration[1], k)[2]
 
 
 def score_attempts(v_by_user, attempt_rows, metric, n_enrollment, calibrations=None):
@@ -175,11 +172,11 @@ def main():
             labels = np.asarray([x[1] for x in scored], dtype=int)
             eer, _ = eer_from_scores(scores, labels)
 
-            # Nasadený stav: per-user threshold z LOO + k=2.
+            # Nasadený stav: per-user threshold z LOO + nasadené k.
             deployed_far = []
             deployed_frr = []
             for score, label, _, uid in scored:
-                threshold = threshold_from_calibration(calibrations[uid], 2.0)
+                threshold = threshold_from_calibration(calibrations[uid], settings.K)
                 accepted = score <= threshold
                 if label == 0:
                     deployed_far.append(accepted)
@@ -188,7 +185,7 @@ def main():
             far = float(np.mean(deployed_far)) if deployed_far else math.nan
             frr = float(np.mean(deployed_frr)) if deployed_frr else math.nan
             summary_rows.append({
-                "metric": metric, "enrollment_n": n, "k": 2.0,
+                "metric": metric, "enrollment_n": n, "k": settings.K,
                 "FAR": far, "FRR": frr, "EER": eer,
                 "n_genuine": int(np.sum(labels == 1)), "n_impostor": int(np.sum(labels == 0)),
             })
