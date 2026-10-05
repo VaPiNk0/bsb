@@ -42,7 +42,7 @@
       <form id="enrollForm" class="form-grid">
         <label>
           Používateľské meno
-          <input id="enrollUsername" required minlength="3" maxlength="32" autocomplete="username">
+          <input id="enrollUsername" required minlength="3" maxlength="32" autocomplete="off" autocapitalize="off" spellcheck="false">
         </label>
         <label>
           Heslo
@@ -97,7 +97,7 @@
       <form id="verifyForm" class="form-grid">
         <label>
           <span id="verifyUsernameLabel">Používateľské meno</span>
-          <input id="verifyUsername" required minlength="3" maxlength="32" autocomplete="username">
+          <input id="verifyUsername" required minlength="3" maxlength="32" autocomplete="off" autocapitalize="off" spellcheck="false">
         </label>
         <label>
           Heslo
@@ -105,7 +105,7 @@
         </label>
         <label id="actorField" hidden>
           Tester ID
-          <input id="actorLabel" maxlength="64" placeholder="napr. P03">
+          <input id="actorLabel" maxlength="64" placeholder="napr. P03" autocomplete="off">
         </label>
         <label id="typeField" hidden>
           Typ pokusu
