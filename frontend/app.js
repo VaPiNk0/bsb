@@ -249,15 +249,22 @@ class TypingCapture {
 
 const turnstileWidgets = {};
 
+function renderTurnstile() {
+  for (const name of ["enroll", "verify"]) {
+    const box = $(`${name}Turnstile`);
+    box.hidden = false;
+    if (turnstileWidgets[name] !== undefined) window.turnstile.remove(turnstileWidgets[name]);
+    turnstileWidgets[name] = window.turnstile.render(box, {
+      sitekey: BOOT.turnstile_site_key, language: "sk", theme: document.documentElement.dataset.theme || "auto",
+    });
+  }
+}
+
 function setupTurnstile() {
   if (!BOOT.turnstile_site_key) return;
-  window.onTurnstileLoad = () => {
-    for (const name of ["enroll", "verify"]) {
-      const box = $(`${name}Turnstile`);
-      box.hidden = false;
-      turnstileWidgets[name] = window.turnstile.render(box, { sitekey: BOOT.turnstile_site_key, language: "sk", theme: "auto" });
-    }
-  };
+  window.onTurnstileLoad = renderTurnstile;
+  // widget si tému drží od vykreslenia, po prepnutí ho treba vykresliť znova
+  document.addEventListener("themechange", () => { if (window.turnstile) renderTurnstile(); });
   const script = document.createElement("script");
   script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstileLoad&render=explicit";
   script.async = true;

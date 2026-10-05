@@ -39,36 +39,35 @@
   background: var(--bg);
   line-height: 1.55;
 }
-/* Svetlá verzia podľa nastavenia systému: mení sa len paleta, rozloženie ostáva. */
-@media (prefers-color-scheme: light) {
-  :root {
-    color-scheme: light;
-    --veil-rgb: 16, 28, 40;
-    --accent-rgb: 13, 138, 129;
-    --amber-rgb: 199, 127, 12;
-    --ok-rgb: 26, 135, 84;
-    --bad-rgb: 201, 52, 52;
-    --bg: #f2f4f7;
-    --surface: #ffffff;
-    --surface-2: #f5f7fa;
-    --inset: #fbfcfd;
-    --line: #dfe4ea;
-    --line-strong: #c6cfd9;
-    --line-hover: #9eabb8;
-    --ink: #101a24;
-    --ink-soft: #4a5867;
-    --ink-faint: #76838f;
-    --accent: #0d8a81;
-    --accent-bright: #0a746c;
-    --on-accent: #ffffff;
-    --amber: #c77f0c;
-    --ok: #1a8754;
-    --bad: #c93434;
-    --warn: #a3660a;
-    --violet: #6d4fc4;
-    --ch-pending: #a9b4bf;
-    --bar-idle: #e3e8ed;
-  }
+/* Svetlá verzia: mení sa len paleta, rozloženie ostáva. Tému nastavuje theme.js na <html>
+   (podľa systému, alebo podľa voľby prepínačom v hlavičke). */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --veil-rgb: 16, 28, 40;
+  --accent-rgb: 13, 138, 129;
+  --amber-rgb: 199, 127, 12;
+  --ok-rgb: 26, 135, 84;
+  --bad-rgb: 201, 52, 52;
+  --bg: #f2f4f7;
+  --surface: #ffffff;
+  --surface-2: #f5f7fa;
+  --inset: #fbfcfd;
+  --line: #dfe4ea;
+  --line-strong: #c6cfd9;
+  --line-hover: #9eabb8;
+  --ink: #101a24;
+  --ink-soft: #4a5867;
+  --ink-faint: #76838f;
+  --accent: #0d8a81;
+  --accent-bright: #0a746c;
+  --on-accent: #ffffff;
+  --amber: #c77f0c;
+  --ok: #1a8754;
+  --bad: #c93434;
+  --warn: #a3660a;
+  --violet: #6d4fc4;
+  --ch-pending: #a9b4bf;
+  --bar-idle: #e3e8ed;
 }
 * { box-sizing: border-box; }
 body {
@@ -123,6 +122,17 @@ p { color: var(--ink-soft); margin: 8px 0 0; max-width: 62ch; }
   font-family: var(--font-num); font-size: 11.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--accent);
 }
 .eyebrow::before { content: ""; width: 22px; height: 1px; background: var(--accent); }
+
+.topbar-actions { display: flex; align-items: center; gap: 10px; }
+.icon-button {
+  display: inline-grid; place-items: center; width: 34px; height: 34px; padding: 0; flex: none;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink-soft);
+  transition: color .15s, border-color .15s;
+}
+.icon-button:hover { color: var(--accent); border-color: var(--accent); }
+.icon-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+/* ikona ukazuje, na čo sa prepne */
+:root[data-theme="light"] .icon-sun, :root:not([data-theme="light"]) .icon-moon { display: none; }
 
 .status-pill, .counter {
   display: inline-flex; align-items: center; gap: 8px;
