@@ -277,11 +277,17 @@ function resetTurnstile(name) {
 
 // ---------- pomocné ----------
 
-async function api(path, body = null, method = "POST") {
+async function api(path, body = null, method = "POST", retry = true) {
   const options = { method, headers: { "Content-Type": "application/json", "X-CSRF-Token": BOOT.csrf } };
   if (body !== null) options.body = JSON.stringify(body);
   const response = await fetch(path, options);
   const data = await response.json().catch(() => ({}));
+  // Relácia medzičasom zanikla (reštart servera, zmazané cookies): vypýtame si nový token a skúsime raz znova.
+  if (response.status === 400 && retry && /CSRF/.test(data.error || "")) {
+    const boot = await fetch("/api/bootstrap", { cache: "no-store" }).then((r) => r.json());
+    BOOT.csrf = boot.csrf;
+    return api(path, body, method, false);
+  }
   if (!response.ok) {
     const error = new Error(data.error || `HTTP ${response.status}`);
     error.status = response.status;

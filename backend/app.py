@@ -286,6 +286,8 @@ def security_headers(response):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
+    if request.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"   # CSRF token ani výsledky sa nesmú brať z cache
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'; "
         "connect-src 'self'; frame-src https://challenges.cloudflare.com; "
