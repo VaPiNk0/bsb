@@ -196,6 +196,18 @@ def session_user():
     return user
 
 
+def is_admin(username: str) -> bool:
+    return not settings.ADMIN_USERS or username in settings.ADMIN_USERS
+
+
+def session_admin():
+    """Prihlásený používateľ s prístupom do admin panela, inak None."""
+    if "auth_user_id" not in session:
+        return None
+    user = get_user(int(session["auth_user_id"]))
+    return user if user and is_admin(user["username"]) else None
+
+
 def verify_rate_limit(username: str) -> None:
     count = recent_attempt_count(client_ip(), username, settings.RATE_LIMIT_WINDOW_SECONDS)
     if count >= settings.RATE_LIMIT_MAX_ATTEMPTS:
@@ -290,7 +302,7 @@ def index():
 
 @app.get("/admin")
 def admin_page():
-    if "auth_user_id" not in session:
+    if not session_admin():
         return redirect(url_for("index"))
     return send_from_directory(FRONTEND, "admin.html")
 
@@ -533,6 +545,7 @@ def verification():
             threshold=round(threshold, 6),
             metric=metric,
             test_mode=test_mode,
+            is_admin=accepted and is_admin(username),
             refresh=refresh_info(get_user(user_id)) if accepted else None,
         ), (200 if accepted else 401)
     except PermissionError as exc:
@@ -543,12 +556,9 @@ def verification():
 
 @app.get("/api/admin/overview")
 def admin_overview():
-    if "auth_user_id" not in session:
-        return jsonify(error="Neautorizované"), 401
-    current = get_user(int(session["auth_user_id"]))
+    current = session_admin()
     if not current:
-        session.clear()
-        return jsonify(error="Relácia skončila"), 401
+        return jsonify(error="Neautorizované"), 401 if "auth_user_id" not in session else 403
     users = []
     for row in list_users():
         item = dict(row)
@@ -683,8 +693,8 @@ def admin_age_template():
     """Len v test mode: simuluje ubehnutie času, aby sa dala predviesť mesačná obnova."""
     if not settings.ALLOW_TEST_MODE:
         return jsonify(error="Dostupné len v test mode."), 403
-    if "auth_user_id" not in session:
-        return jsonify(error="Neautorizované"), 401
+    if not session_admin():
+        return jsonify(error="Neautorizované"), 401 if "auth_user_id" not in session else 403
     try:
         require_csrf()
         body = json_body()

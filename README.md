@@ -258,4 +258,4 @@ Prehliadač komunikuje len s doménou Pages (rovnaký pôvod, takže cookies a C
 
 Testy proti Postgresu: `TEST_DATABASE_URL=postgresql://... pytest tests/test_api.py` (tabuľky v danej DB sa zmažú). Bezplatný Render uspáva službu po 15 minútach nečinnosti; prvá požiadavka potom trvá desiatky sekúnd.
 
-**Pozor pri verejnom nasadení:** admin panel vidí každý prihlásený používateľ a registrácia je otvorená. Zobrazuje pokusy všetkých účtov vrátane IP adries.
+**Admin panel.** `ADMIN_USERS` (mená oddelené čiarkou) určuje, ktoré účty smú do admin panela; ostatní prihlásení používatelia dostanú 403 a odkaz na panel sa im nezobrazí. Lokálne je premenná prázdna a panel vidí každý prihlásený používateľ. Registrácia je otvorená a meno účtu si môže zabrať ktokoľvek, preto si admin účet zaregistruj hneď po nasadení.

@@ -325,3 +325,22 @@ def test_api_answers_only_through_the_proxy(client):
                 headers={**c_h(client), "X-Client-IP": "203.0.113.7"})
     import backend.db as db
     assert db.list_attempts(1)[0]["ip"] == "203.0.113.7"
+
+
+@pytest.mark.parametrize("client", [{"ADMIN_USERS": "P01"}], indirect=True)
+def test_admin_panel_is_limited_to_listed_accounts(client):
+    enroll(client)
+    enroll(client, username="P02")
+    assert login(client)["is_admin"] is True
+    assert client.get("/api/admin/overview").status_code == 200
+    assert client.get("/admin").status_code == 200
+
+    r = verify(client, "P02", "dlhe-heslo-123", random.Random(50), jitter=5.0)
+    assert r.status_code == 200 and r.get_json()["is_admin"] is False     # prihlásený, ale nie admin
+    assert client.get("/api/admin/overview").status_code == 403
+    assert client.get("/admin").status_code == 302
+    assert client.get("/api/refresh/status").status_code == 200           # vlastné veci mu fungujú ďalej
+
+
+def test_admin_panel_requires_login(client):
+    assert client.get("/api/admin/overview").status_code == 401

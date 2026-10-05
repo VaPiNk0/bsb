@@ -65,6 +65,11 @@ class Settings:
     # odpovedá len cez proxy a skutočná IP klienta sa berie z jej hlavičky.
     PROXY_SECRET: str = os.getenv("PROXY_SECRET", "")
     COOKIE_SECURE: bool = os.getenv("COOKIE_SECURE", "0") == "1"
+    # Účty (oddelené čiarkou), ktoré smú do admin panela. Prázdne = každý prihlásený používateľ,
+    # čo stačí na lokálne demo; pri verejnom nasadení s otvorenou registráciou to treba nastaviť.
+    ADMIN_USERS: frozenset = frozenset(
+        name.strip() for name in os.getenv("ADMIN_USERS", "").split(",") if name.strip()
+    )
 
     SECRET_KEY: str = os.getenv("SECRET_KEY") or secrets.token_hex(32)
     DB_PATH: str = os.getenv("DB_PATH", str(PROJECT_ROOT / "data" / "keystroke.db"))

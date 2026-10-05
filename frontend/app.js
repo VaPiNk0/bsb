@@ -563,7 +563,7 @@ function renderResult(data) {
   $("resultScore").textContent = Number.isFinite(data.score) ? data.score.toFixed(3) : "—";
   $("resultThreshold").textContent = Number.isFinite(data.threshold) ? data.threshold.toFixed(3) : "—";
   $("resultMetric").textContent = data.metric || BOOT.metric;
-  $("adminLink").hidden = !data.accepted;
+  $("adminLink").hidden = !data.is_admin;
   card.classList.toggle("accepted", !!data.accepted);
   card.classList.toggle("rejected", !data.accepted);
   // skryť a znova ukázať: animácia príchodu sa prehrá pri každom výsledku
