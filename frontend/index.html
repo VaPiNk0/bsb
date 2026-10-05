@@ -3,14 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0a0e13">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#0a0e13" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
   <title>Keystroke 2FA · TUKE</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <main class="container">
     <div class="topbar">
-      <div class="brand"><svg viewBox="0 0 40 40" aria-hidden="true"><rect x=".5" y=".5" width="39" height="39" rx="9" fill="#10151c" stroke="#2e3947"/><rect x="8" y="21" width="3" height="11" rx="1" fill="#4fd1c5"/><rect x="15" y="12" width="3" height="20" rx="1" fill="#4fd1c5"/><rect x="22" y="17" width="3" height="15" rx="1" fill="#f0b354"/><rect x="29" y="9" width="3" height="23" rx="1" fill="#4fd1c5"/></svg><div>Keystroke 2FA<small>TUKE FEI · Biometrické systémy bezpečnosti</small></div></div>
+      <div class="brand"><svg viewBox="0 0 40 40" aria-hidden="true"><rect class="logo-bg" x=".5" y=".5" width="39" height="39" rx="9"/><rect class="logo-bar" x="8" y="21" width="3" height="11" rx="1"/><rect class="logo-bar" x="15" y="12" width="3" height="20" rx="1"/><rect class="logo-bar-alt" x="22" y="17" width="3" height="15" rx="1"/><rect class="logo-bar" x="29" y="9" width="3" height="23" rx="1"/></svg><div>Keystroke 2FA<small>TUKE FEI · Biometrické systémy bezpečnosti</small></div></div>
       <div class="status-pill" id="configPill">Načítavam konfiguráciu…</div>
     </div>
 

@@ -64,7 +64,7 @@ const TREND = {
   stable: ["neutral", "stabilné"],
   degraded: ["warn", "zhoršenie"],
 };
-const LINE_COLORS = ["#4fd1c5", "#f0b354", "#f47a7a", "#45d08f", "#a78bfa", "#9ba8b6"];
+const SERIES = 6;   // počet farieb radov v style.css (.s0 – .s5)
 
 function pctText(v) {
   return v === null || v === undefined ? "—" : `${v > 0 ? "+" : ""}${Number(v).toFixed(1)} %`;
@@ -117,16 +117,16 @@ function renderHistory(history) {
   }
   for (let c = 0; c <= maxCycle; c++) svg += `<text x="${x(c)}" y="${H - 8}" text-anchor="${c === 0 ? "start" : c === maxCycle ? "end" : "middle"}">${c === 0 ? "začiatok" : `mesiac ${c}`}</text>`;
   Object.entries(byUser).forEach(([name, pts], i) => {
-    const color = LINE_COLORS[i % LINE_COLORS.length];
-    svg += `<polyline fill="none" stroke="${color}" stroke-width="2.5" points="${pts.map((p) => `${x(p.cycle)},${y(p.v)}`).join(" ")}"/>`;
-    pts.forEach((p) => { svg += `<circle cx="${x(p.cycle)}" cy="${y(p.v)}" r="5" fill="${color}" class="dot"><title>${escapeHtml(name)}: ${p.v.toFixed(0)} ms</title></circle>`; });
+    const series = `series s${i % SERIES}`;
+    svg += `<polyline class="${series}" points="${pts.map((p) => `${x(p.cycle)},${y(p.v)}`).join(" ")}"/>`;
+    pts.forEach((p) => { svg += `<circle cx="${x(p.cycle)}" cy="${y(p.v)}" r="5" class="dot ${series}"><title>${escapeHtml(name)}: ${p.v.toFixed(0)} ms</title></circle>`; });
   });
   chart.innerHTML = svg + "</svg>";
   legend.replaceChildren();
   Object.keys(byUser).forEach((name, i) => {
     const item = document.createElement("span");
     const dot = document.createElement("i");
-    dot.style.background = LINE_COLORS[i % LINE_COLORS.length];   // CSP blokuje inline style="" v HTML, nie CSSOM
+    dot.className = `series s${i % SERIES}`;
     item.append(dot, name);
     legend.appendChild(item);
   });
@@ -148,7 +148,7 @@ function renderChart(attempts) {
   const max = Math.max(2, Math.ceil(Math.max(...ratios) * 2) / 2);
   const x = (i) => L + (rows.length === 1 ? (W - L - R) / 2 : (i / (rows.length - 1)) * (W - L - R));
   const y = (v) => T + (1 - v / max) * (H - T - B);
-  const colors = { genuine: "#45d08f", impostor: "#f47a7a", imitacia: "#f0b354" };
+  const known = ["genuine", "impostor", "imitacia"];
   let svg = `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Skóre pokusov vydelené prahom">`;
   svg += `<rect x="${L}" y="${y(1)}" width="${W - L - R}" height="${H - B - y(1)}" class="zone-ok"/>`;
   for (let v = 0; v <= max; v += 0.5) {
@@ -156,7 +156,7 @@ function renderChart(attempts) {
     svg += `<text x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${v.toFixed(1)}</text>`;
   }
   rows.forEach((a, i) => {
-    svg += `<circle cx="${x(i)}" cy="${y(ratios[i])}" r="6" fill="${colors[a.attempt_type] || "#9ba8b6"}" class="dot"><title>${escapeHtml(a.actor_label || a.username)} → ${escapeHtml(a.username)}: ${ratios[i].toFixed(2)}× prah</title></circle>`;
+    svg += `<circle cx="${x(i)}" cy="${y(ratios[i])}" r="6" class="dot series t-${known.includes(a.attempt_type) ? a.attempt_type : "other"}"><title>${escapeHtml(a.actor_label || a.username)} → ${escapeHtml(a.username)}: ${ratios[i].toFixed(2)}× prah</title></circle>`;
   });
   svg += `<text x="${W - R}" y="${y(1) - 6}" text-anchor="end">prah = 1,0</text></svg>`;
   box.innerHTML = svg;
