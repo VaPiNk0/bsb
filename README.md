@@ -25,7 +25,7 @@ Semestrálny projekt: behaviorálna biometrická autentifikácia podľa dynamiky
 
 **Shrinkage škály a orezanie z:** príznak videný len v 2–5 vetách má MAD veľmi nepresnú (často náhodne skoro nulovú), takže jediný bigram vedel dať |z| ≈ 5–10. To nafukovalo rozptyl genuine skóre, a tým aj prah. Preto sa škála každého príznaku ťahá k typickej relatívnej škále dobre pozorovaných príznakov (váha 4 pozorovania) a |z| jedného príznaku sa orezáva na 3. Na podvzorke verejného datasetu Aalto 136M Keystrokes (587 ľudí, 10 viet enrollment, zvyšné vety genuine, 40 cudzích viet na účet) to znížilo EER z ~18 % na ~10,5 % a FAR pri k = 2 zo 42 % na 20 %.
 
-**k = 1.0:** na tom istom benchmarku (polovica ľudí odložená, na druhej sa ladilo; čísla sú z odloženej) dáva aktuálna verzia pri jednom pokuse k = 0.75 FRR 19 % / FAR 4 %, k = 1 FRR 15 % / FAR 6 %, k = 1.5 FRR 8 % / FAR 9 %, k = 2 FRR 5 % / FAR 13,5 %; EER 8,8 % (predtým 10,1 %). Po zamietnutí však appka hneď ponúkne novú vetu, takže rozhoduje, čo sa stane v priebehu niekoľkých pokusov: do 3 pokusov je to pri k = 1 FRR 0,3 % / FAR 11 %, pri k = 1.5 FRR 0,1 % / FAR 16 % (pôvodná verzia s k = 1.5: FRR 0,6 % / FAR 21 %). Opakovanie pomáha pravému používateľovi oveľa viac než cudziemu (jeho pokusy sú zlé konzistentne), preto je default prísnejší: cudzí má približne polovičnú šancu, pravý používateľ občas píše jednu vetu navyše. Pre menej zamietnutí nastav `K=1.5`. V evaluácii sa k sweepuje, pretože bezpečnostne kritický admin systém nemá byť obhajovaný iba jednou arbitrárnou hodnotou. Čísla sú z cudzieho datasetu (anglické vety, každý účastník na vlastnej klávesnici), takže sú orientačné; vlastné meranie rob cez `evaluate.py`.
+**k = 1.5:** na tom istom benchmarku (polovica ľudí odložená, na druhej sa ladilo; čísla sú z odloženej) dáva aktuálna verzia pri jednom pokuse k = 0.75 FRR 19 % / FAR 4 %, k = 1 FRR 15 % / FAR 6 %, k = 1.5 FRR 8 % / FAR 9 %, k = 2 FRR 5 % / FAR 13,5 %; EER 8,8 % (predtým 10,1 %). Po zamietnutí však appka hneď ponúkne novú vetu, takže rozhoduje, čo sa stane v priebehu niekoľkých pokusov: do 3 pokusov je to pri k = 1 FRR 0,3 % / FAR 11 %, pri k = 1.5 FRR 0,1 % / FAR 16 % (pôvodná verzia s k = 1.5: FRR 0,6 % / FAR 21 %). Opakovanie pomáha pravému používateľovi oveľa viac než cudziemu (jeho pokusy sú zlé konzistentne). Benchmark je však písaný v jednom sedení; pri prihlásení v iný deň než registrácia vychádzajú skóre pravého používateľa vyššie než LOO odhad, a k = 1 ho v praxi zamietalo príliš často. Default je preto 1.5; pre prísnejší systém nastav `K=1.0`, pre menej zamietnutí `K=2.0`. V evaluácii sa k sweepuje, pretože bezpečnostne kritický admin systém nemá byť obhajovaný iba jednou arbitrárnou hodnotou. Čísla sú z cudzieho datasetu (anglické vety, každý účastník na vlastnej klávesnici), takže sú orientačné; vlastné meranie rob cez `evaluate.py`.
 
 **Mahalanobis:** používa sa na porovnanie. Kovariancia z-skóre sa shrinkuje k identite; pri skórovaní sa berie len podmatica pre pozorované príznaky a výsledok sa delí počtom príznakov, aby boli skóre porovnateľné medzi vetami.
 
@@ -90,7 +90,7 @@ Databáza sa vytvorí automaticky v `data/keystroke.db`.
 
 ```text
 METRIC=manhattan|mahalanobis
-K=1.0
+K=1.5
 ADAPTIVE_TEMPLATE=0|1
 ALLOW_TEST_MODE=0
 ENFORCE_LOCKOUT_IN_TEST_MODE=0
@@ -172,7 +172,7 @@ pytest -q
 - **Test mode** je defaultne vypnutý (pozri vyššie).
 - **Bez enumerácie používateľov**: `/api/verification/begin` vracia rovnakú odpoveď pre neexistujúci účet aj účet bez šablóny; zamknutie sa odhalí len pri správnom hesle.
 - **Presnejšie časovanie**: frontend berie čas klávesy z `event.timeStamp`, nie z `performance.now()` v handleri, takže prekresľovanie UI neskresľuje dwell/DD.
-- **Presnejšie rozpoznanie** (verzia šablóny 4): 11 nových príznakov rozloženia časov, stabilnejší prah, default `K=1.0`; kovariancia sa ukladá len pre Mahalanobis (šablóna má ~2 kB namiesto ~90 kB).
+- **Presnejšie rozpoznanie** (verzia šablóny 4): 11 nových príznakov rozloženia časov, stabilnejší prah; kovariancia sa ukladá len pre Mahalanobis (šablóna má ~2 kB namiesto ~90 kB).
 - **Robustnejšie skórovanie** (verzia šablóny 3): shrinkage škály, orezanie |z|. Staršie šablóny sa pri najbližšom prihlásení automaticky prepočítajú z uložených enrollment vzoriek.
 - **Nový frontend**: živý graf rytmu písania (dwell/DD pre každú klávesu), segmentovaný postup registrácie, ukazovateľ skóre voči prahu a v admin paneli graf skóre/prah všetkých pokusov.
 
