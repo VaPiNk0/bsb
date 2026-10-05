@@ -89,3 +89,15 @@ def test_invalid_key_rejected():
     events[0]["key"] = "A"
     with pytest.raises(ValueError, match="klávesa"):
         extract_features(events, PHRASE_A)
+
+
+def test_distribution_features_follow_the_timing():
+    """Kvartily a chvosty časov sú na konci vektora a sedia s tým, ako sa písalo."""
+    features = dict(zip(FEATURE_NAMES, extract_features(type_events(PHRASE_A), PHRASE_A)))
+    assert features["p25_dwell"] == features["p90_dwell"] == 80.0
+    assert features["p10_dd"] == features["p75_dd"] == 200.0
+    assert features["p10_ud"] == features["p90_ud"] == 120.0
+    varied = dict(zip(FEATURE_NAMES, extract_features(type_events(PHRASE_A, rng=random.Random(3)), PHRASE_A)))
+    assert varied["p10_dwell"] < varied["p25_dwell"] < varied["median_dwell"] < varied["p75_dwell"] < varied["p90_dwell"]
+    assert FEATURE_NAMES[-11:] == ["p25_dd", "p75_dd", "p25_dwell", "p75_dwell", "p25_ud", "p75_ud",
+                                   "p10_dwell", "p90_dwell", "p10_dd", "p10_ud", "p90_ud"]

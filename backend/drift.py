@@ -16,7 +16,7 @@ import warnings
 import numpy as np
 
 from .features import FEATURE_NAMES
-from .scoring import score_with_stats, template_to_stats
+from .scoring import score_with_stats, template_to_stats, to_matrix
 
 IDX_DD = FEATURE_NAMES.index("median_dd")
 
@@ -54,8 +54,10 @@ def _col_median(matrix: np.ndarray, idx: int) -> float:
 
 
 def analyze_drift(old_matrix, new_matrix, old_template: dict) -> dict:
-    old = np.asarray(old_matrix, dtype=float)
-    new = np.asarray(new_matrix, dtype=float)
+    # staršie vzorky môžu mať kratší vektor; porovnávajú sa len spoločné stĺpce
+    old, new = to_matrix(old_matrix), to_matrix(new_matrix)
+    width = min(old.shape[1], new.shape[1])
+    old, new = old[:, :width], new[:, :width]
 
     dd_old, dd_new = _col_median(old, IDX_DD), _col_median(new, IDX_DD)
     speed = 100.0 * (dd_new - dd_old) / dd_old if np.isfinite(dd_old) and dd_old > 0 and np.isfinite(dd_new) else None

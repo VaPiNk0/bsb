@@ -33,7 +33,9 @@ class Settings:
 
     # Manhattan je primárny; Mahalanobis sa dá prepnúť cez METRIC.
     METRIC: str = os.getenv("METRIC", "manhattan").lower()
-    K: float = float(os.getenv("K", "2.0"))
+    # k = 1.0: po zamietnutí príde hneď nová veta, takže prísnejší prah stojí pravého používateľa
+    # občas jednu vetu navyše, ale cudziemu zoberie približne polovicu úspešných pokusov (README).
+    K: float = float(os.getenv("K", "1.0"))
     MAD_FLOOR_MS: float = float(os.getenv("MAD_FLOOR_MS", "5.0"))
     ROBUST_Z_LIMIT: float = float(os.getenv("ROBUST_Z_LIMIT", "3.5"))
     COV_SHRINKAGE: float = float(os.getenv("COV_SHRINKAGE", "0.15"))

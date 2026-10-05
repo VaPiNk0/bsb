@@ -197,11 +197,11 @@ def test_refresh_faster_typing_is_improved_and_tightens_threshold(client):
     enroll(client)
     age(client, 31)
     login(client)
-    replies, fin = do_refresh(client, random.Random(60), scale=0.9)
+    replies, fin = do_refresh(client, random.Random(60), scale=0.9, jitter=10.0)
     assert sum(r.status_code == 200 for r in replies) == 6, [r.get_json() for r in replies]
     report = fin.get_json()
     assert fin.status_code == 200, report
-    assert report["verdict"] == "improved"
+    assert report["verdict"] == "improved", report
     assert report["speed_change_pct"] < -5
     assert report["new_samples"] == 6 and report["cycle"] == 1
     # po obnove už nie je ďalšia obnova hneď splatná
@@ -248,3 +248,30 @@ def test_age_endpoint_disabled_outside_test_mode(client):
     login(client)
     r = client.post("/api/admin/age-template", json={"user_id": 1}, headers=c_h(client))
     assert r.status_code == 403
+
+
+def test_template_from_older_scoring_is_rebuilt_on_login(client):
+    """Šablóna zo staršej verzie skórovania (kratšie vektory, iný prah) sa pri prihlásení prepočíta."""
+    import json
+    import backend.db as db
+    from backend.scoring import TEMPLATE_VERSION
+    enroll(client)
+    user = db.get_user_by_username("P01")
+    stale = json.loads(user["template_json"])
+    stale["version"] = TEMPLATE_VERSION - 1
+    stale["threshold"] = 99.0
+    db.save_template(user["id"], stale)
+    assert login(client)["threshold"] < 10
+    assert json.loads(db.get_user_by_username("P01")["template_json"])["version"] == TEMPLATE_VERSION
+
+
+def test_enrollment_checks_password_of_existing_account(client):
+    """Rozpracovanú registráciu nemôže z inej relácie prevziať niekto bez hesla."""
+    import backend.app as appmod
+    body = {"username": "P02", "password": "dlhe-heslo-123", "password_confirm": "dlhe-heslo-123"}
+    assert client.post("/api/enrollment/begin", json=body, headers=c_h(client)).status_code == 200
+    other = appmod.app.test_client()
+    headers = {"X-CSRF-Token": other.get("/api/bootstrap").get_json()["csrf"]}
+    wrong = dict(body, password="ine-heslo-456789", password_confirm="ine-heslo-456789")
+    assert other.post("/api/enrollment/begin", json=wrong, headers=headers).status_code == 409
+    assert other.post("/api/enrollment/begin", json=body, headers=headers).status_code == 200

@@ -38,7 +38,7 @@ from .db import (
 )
 from .drift import analyze_drift, decide_threshold
 from .features import FEATURE_COUNT, extract_features
-from .scoring import build_template, score_vector
+from .scoring import TEMPLATE_VERSION, build_template, score_vector
 from .sentences import next_phrase
 
 
@@ -113,6 +113,37 @@ def refresh_info(user) -> dict:
         "pending": len(get_refresh_samples(int(user["id"]), cycle + 1)),
         "needed": settings.REFRESH_SAMPLES,
     }
+
+
+def vectors_of(rows) -> list[list[float | None]]:
+    return [json.loads(row["features_json"]) for row in rows]
+
+
+def make_template(vectors: list[list[float | None]]) -> dict:
+    return build_template(
+        vectors,
+        metric=settings.METRIC,
+        k=settings.K,
+        floor=settings.MAD_FLOOR_MS,
+        z_limit=settings.ROBUST_Z_LIMIT,
+        shrinkage=settings.COV_SHRINKAGE,
+    )
+
+
+def current_template(user) -> dict:
+    """Šablóna používateľa; ak ju vytvorila iná konfigurácia alebo staršia verzia skórovania,
+    prepočíta sa z uložených enrollment vzoriek (posledných MAX_ENROLLMENT)."""
+    template = json.loads(user["template_json"])
+    if (
+        template.get("version") == TEMPLATE_VERSION
+        and template["metric"] == settings.METRIC
+        and float(template["k"]) == settings.K
+    ):
+        return template
+    user_id = int(user["id"])
+    template = make_template(vectors_of(get_enrollment_samples(user_id)[-settings.MAX_ENROLLMENT:]))
+    save_template(user_id, template)
+    return template
 
 
 def session_user():
@@ -223,6 +254,7 @@ def bootstrap():
         csrf=token,
         feature_count=FEATURE_COUNT,
         max_corrections=settings.MAX_CORRECTIONS,
+        challenge_ttl=settings.CHALLENGE_TTL_SECONDS,
         min_enrollment=settings.MIN_ENROLLMENT,
         max_enrollment=settings.MAX_ENROLLMENT,
         metric=settings.METRIC,
@@ -248,11 +280,14 @@ def enrollment_begin():
         if user:
             if user["template_json"]:
                 return jsonify(error="Používateľ už má vytvorenú šablónu."), 409
-            if not check_password_hash(user["password_hash"], password):
-                return jsonify(error="Používateľ existuje, ale heslo nesedí."), 409
             user_id = int(user["id"])
+            # Heslo sa pri registrácii overuje raz; ďalšie vety tej istej relácie už scrypt
+            # nepočítajú znova (inak ~0,3 s navyše pred každou vetou).
+            if session.get("enroll_user_id") != user_id and not check_password_hash(user["password_hash"], password):
+                return jsonify(error="Používateľ existuje, ale heslo nesedí."), 409
         else:
             user_id = create_user(username, generate_password_hash(password))
+        session["enroll_user_id"] = user_id
         token, challenge_id, phrase = make_challenge(user_id, "enrollment")
         count = len(get_enrollment_samples(user_id))
         return jsonify(
@@ -283,9 +318,10 @@ def enrollment_sample():
             raise ValueError("Challenge je neplatný alebo expirovaný")
         features = extract_features(body.get("events", []), challenge["phrase"], settings.MAX_CORRECTIONS)
         digest = feature_hash(features)
-        if any(row["feature_hash"] == digest for row in get_enrollment_samples(user_id)):
+        samples = get_enrollment_samples(user_id)
+        if any(row["feature_hash"] == digest for row in samples):
             return jsonify(error="Identická enrollment vzorka bola už použitá. Zopakuj ju."), 409
-        existing = len(get_enrollment_samples(user_id))
+        existing = len(samples)
         if existing >= settings.MAX_ENROLLMENT:
             return jsonify(error="Maximum enrollment vzoriek už bolo dosiahnuté."), 409
         add_enrollment_sample(user_id, existing + 1, features, challenge["phrase"])
@@ -305,17 +341,10 @@ def enrollment_finish():
         samples = get_enrollment_samples(user_id)
         if len(samples) < settings.MIN_ENROLLMENT:
             return jsonify(error=f"Potrebných je aspoň {settings.MIN_ENROLLMENT} vzoriek."), 400
-        vectors = [json.loads(row["features_json"]) for row in samples]
-        template = build_template(
-            vectors,
-            metric=settings.METRIC,
-            k=settings.K,
-            floor=settings.MAD_FLOOR_MS,
-            z_limit=settings.ROBUST_Z_LIMIT,
-            shrinkage=settings.COV_SHRINKAGE,
-        )
+        template = make_template(vectors_of(samples))
         save_template(user_id, template)
         stamp_template(user_id, 0)
+        session.pop("enroll_user_id", None)
         return jsonify(ok=True, count=len(samples), threshold=template["threshold"], metric=settings.METRIC)
     except (ValueError, TypeError) as exc:
         return jsonify(error=str(exc)), 400
@@ -404,8 +433,9 @@ def verification():
 
         if not user["template_json"]:
             return jsonify(error="Autentifikácia zlyhala."), 401
-        template = json.loads(user["template_json"])
+        template = current_template(user)
         metric = settings.METRIC
+        threshold = float(template["threshold"])
         score = score_vector(features, template, metric=metric)
         if not math.isfinite(score):
             store_attempt(
@@ -415,22 +445,6 @@ def verification():
                 phrase=phrase,
             )
             return jsonify(error="Veta obsahovala príliš málo použiteľných kláves. Skús znova s novou vetou."), 400
-        threshold = float(template["threshold"]) if template["metric"] == metric and float(template["k"]) == settings.K else None
-        if threshold is None:
-            # Konfigurácia bola zmenená; šablónu prepočítame z uložených enrollment vzoriek.
-            samples = get_enrollment_samples(user_id)
-            vectors = [json.loads(row["features_json"]) for row in samples]
-            template = build_template(
-                vectors,
-                metric=metric,
-                k=settings.K,
-                floor=settings.MAD_FLOOR_MS,
-                z_limit=settings.ROBUST_Z_LIMIT,
-                shrinkage=settings.COV_SHRINKAGE,
-            )
-            save_template(user_id, template)
-            threshold = float(template["threshold"])
-            score = score_vector(features, template, metric=metric)
 
         accepted = score <= threshold
         store_attempt(
@@ -444,11 +458,13 @@ def verification():
 
         # Adaptácia len pri genuine úspechu; test/impostor výsledok šablónu nemení.
         if accepted and settings.ADAPTIVE_TEMPLATE and attempt_type == "genuine" and actor == username:
-            center = template["center"]
             alpha = settings.ADAPTIVE_ALPHA
+            center = template["center"]
+            # príznak, ktorý vo vete nebol (alebo ho šablóna nepozná), sa nemení
             template["center"] = [
-                (1 - alpha) * float(c) + alpha * float(x) for c, x in zip(center, features)
-            ]
+                c if c is None or x is None else (1 - alpha) * float(c) + alpha * float(x)
+                for c, x in zip(center, features)
+            ] + center[len(features):]
             save_template(user_id, template)
 
         if accepted:
@@ -541,7 +557,7 @@ def refresh_sample():
         if digest in known:
             return jsonify(error="Identická vzorka bola už použitá. Zopakuj ju."), 409
 
-        template = json.loads(user["template_json"])
+        template = current_template(user)
         score = score_vector(features, template)
         threshold = float(template["threshold"])
         # ochrana pred otrávením šablóny: vzorka musí byť rozumne blízko aktuálnej šablóne
@@ -570,22 +586,18 @@ def refresh_finish():
         if len(pending) < settings.REFRESH_SAMPLES:
             raise ValueError(f"Potrebných je aspoň {settings.REFRESH_SAMPLES} vzoriek.")
 
-        old_template = json.loads(user["template_json"])
+        old_template = current_template(user)
         existing = get_enrollment_samples(user_id)
-        old_window = [json.loads(r["features_json"]) for r in existing[-settings.MAX_ENROLLMENT:]]
-        new_vectors = [json.loads(r["features_json"]) for r in pending]
+        old_window = vectors_of(existing[-settings.MAX_ENROLLMENT:])
+        new_vectors = vectors_of(pending)
 
         report = analyze_drift(old_window, new_vectors, old_template)
 
         # nové vzorky sa pridajú k tým pôvodným; šablóna sa počíta z posledných MAX_ENROLLMENT
         next_index = (int(existing[-1]["sample_index"]) if existing else 0) + 1
-        for offset, row in enumerate(pending):
-            add_enrollment_sample(user_id, next_index + offset, json.loads(row["features_json"]), row["phrase"], cycle)
-        window = [json.loads(r["features_json"]) for r in get_enrollment_samples(user_id)[-settings.MAX_ENROLLMENT:]]
-        new_template = build_template(
-            window, metric=settings.METRIC, k=settings.K, floor=settings.MAD_FLOOR_MS,
-            z_limit=settings.ROBUST_Z_LIMIT, shrinkage=settings.COV_SHRINKAGE,
-        )
+        for offset, (row, vector) in enumerate(zip(pending, new_vectors)):
+            add_enrollment_sample(user_id, next_index + offset, vector, row["phrase"], cycle)
+        new_template = make_template((old_window + new_vectors)[-settings.MAX_ENROLLMENT:])
         old_threshold = float(old_template["threshold"])
         threshold, capped = decide_threshold(
             old_threshold, float(new_template["threshold"]),

@@ -19,16 +19,16 @@ def parse_iso(value: str) -> datetime:
 
 
 def _connect() -> sqlite3.Connection:
-    Path(settings.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(settings.DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 
 def init_db() -> None:
+    Path(settings.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     with _connect() as conn:
+        conn.execute("PRAGMA journal_mode=WAL")   # zapíše sa do súboru DB, stačí raz
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS users (
