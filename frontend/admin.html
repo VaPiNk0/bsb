@@ -3,16 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0a0e13">
   <title>Admin Panel</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <main class="container wide">
     <div class="topbar">
-      <div class="brand"><svg viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" rx="10" fill="#0f5c63"/><rect x="7" y="21" width="4" height="12" rx="1" fill="#f0a830"/><rect x="14" y="12" width="4" height="21" rx="1" fill="#f0a830"/><rect x="21" y="17" width="4" height="16" rx="1" fill="#fff"/><rect x="28" y="8" width="4" height="25" rx="1" fill="#f0a830"/></svg><div>Keystroke 2FA<small>Admin · audit a konfigurácia</small></div></div>
+      <div class="brand"><svg viewBox="0 0 40 40" aria-hidden="true"><rect x=".5" y=".5" width="39" height="39" rx="9" fill="#10151c" stroke="#2e3947"/><rect x="8" y="21" width="3" height="11" rx="1" fill="#4fd1c5"/><rect x="15" y="12" width="3" height="20" rx="1" fill="#4fd1c5"/><rect x="22" y="17" width="3" height="15" rx="1" fill="#f0b354"/><rect x="29" y="9" width="3" height="23" rx="1" fill="#4fd1c5"/></svg><div>Keystroke 2FA<small>Admin · audit a konfigurácia</small></div></div>
       <div class="form-actions"><span class="status-pill" id="currentUser">—</span><button class="secondary" id="logoutBtn">Odhlásiť</button></div>
     </div>
-    <header class="hero"><div><h1>Prehľad pokusov</h1><p class="lead">Kto sa prihlasoval, aké mal skóre a kde leží prah.</p></div></header>
+    <header class="hero"><div><p class="eyebrow">Audit · konfigurácia</p><h1>Prehľad pokusov</h1><p class="lead">Kto sa prihlasoval, aké mal skóre a kde leží prah.</p></div></header>
 
     <section class="stats-grid" id="statsGrid"></section>
 

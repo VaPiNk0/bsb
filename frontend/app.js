@@ -255,7 +255,7 @@ function setupTurnstile() {
     for (const name of ["enroll", "verify"]) {
       const box = $(`${name}Turnstile`);
       box.hidden = false;
-      turnstileWidgets[name] = window.turnstile.render(box, { sitekey: BOOT.turnstile_site_key, language: "sk" });
+      turnstileWidgets[name] = window.turnstile.render(box, { sitekey: BOOT.turnstile_site_key, language: "sk", theme: "dark" });
     }
   };
   const script = document.createElement("script");
