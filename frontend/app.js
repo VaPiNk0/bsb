@@ -794,8 +794,20 @@ function buildFlows() {
   };
 }
 
+// Telefón server odmieta (rovnaký test hlavičky User-Agent je v backend/app.py), preto mu
+// namiesto aplikácie ukážeme len zamietaciu obrazovku.
+function isPhone() {
+  return navigator.userAgentData?.mobile ?? /Mobi|iPhone|iPod/.test(navigator.userAgent);
+}
+
 function setup() {
+  if (isPhone()) {
+    document.querySelectorAll("main > :not(.topbar), #configPill").forEach((el) => { el.hidden = el.id !== "phoneBlock"; });
+    return;
+  }
   drawDemo();
+  // Systém meria držanie kláves, čo dotyková klávesnica neposkytuje (a plocha na písanie ju ani neotvorí).
+  $("touchNotice").hidden = !matchMedia("(hover: none) and (pointer: coarse)").matches;
   fetch("/api/bootstrap").then((r) => r.json()).then((boot) => {
     BOOT = boot;
     $("configPill").textContent = `${t("metrika", "metric")} ${boot.metric}, k = ${boot.k}`;
@@ -808,9 +820,6 @@ function setup() {
   }).catch((error) => showMessage("enrollMessage", `${t("Načítanie konfigurácie zlyhalo", "Loading the configuration failed")}: ${error.message}`, "error"));
 
   document.querySelectorAll(".tab").forEach((button) => button.addEventListener("click", () => setTab(button.dataset.tab)));
-
-  // Systém meria držanie kláves, čo dotyková klávesnica neposkytuje (a plocha na písanie ju ani neotvorí).
-  $("touchNotice").hidden = !matchMedia("(hover: none) and (pointer: coarse)").matches;
 
   submitOnce($("enrollForm"), startEnrollment);
   $("enrollSkip").addEventListener("click", () => enrollFlow.next());

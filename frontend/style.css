@@ -149,6 +149,9 @@ p { margin: 8px 0 0; max-width: 64ch; color: var(--ink-soft); }
 .notice { border-left: 3px solid var(--ochre); padding: 2px 0 2px 16px; margin-bottom: 40px; max-width: 78ch; font-size: 15px; color: var(--ink-soft); }
 .notice strong { color: var(--ink); font-weight: 600; }
 
+/* Zamietacia obrazovka pre telefón: jediná vec na stránke */
+.phone-block .button-link { margin-top: 32px; }
+
 /* ---------- Prepínač režimu ---------- */
 .tabs { display: inline-flex; border: 1px solid var(--ink); border-radius: 4px; overflow: hidden; margin-bottom: 20px; }
 .tab { border: 0; background: transparent; color: var(--ink); padding: 9px 22px; font-weight: 600; font-size: 16px; }
