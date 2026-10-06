@@ -19,6 +19,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from .config import settings
 from .db import (
+    IntegrityError,
     add_enrollment_sample,
     add_refresh_sample,
     age_template,
@@ -313,6 +314,12 @@ def human_check_failed(exc):
     return jsonify(error=str(exc), captcha=True), 403
 
 
+@app.errorhandler(500)
+def server_error(exc):
+    # Výnimku Flask už zalogoval; klient dostane čitateľnú hlášku namiesto HTML stránky.
+    return jsonify(error="Na serveri nastala chyba. Skús to o chvíľu znova."), 500
+
+
 @app.after_request
 def translate_error(response):
     if request_lang() == "en" and response.is_json:
@@ -399,7 +406,11 @@ def enrollment_begin():
             lang = phrase_lang(user)
         else:
             lang = request_lang()
-            user_id = create_user(username, generate_password_hash(password), lang)
+            try:
+                user_id = create_user(username, generate_password_hash(password), lang)
+            except IntegrityError:
+                # dve súbežné požiadavky s tým istým menom (dvojité odoslanie formulára)
+                return jsonify(error="Registrácia tohto mena práve prebieha. Skús to znova."), 409
         session["enroll_user_id"] = user_id
         token, challenge_id, phrase = make_challenge(user_id, "enrollment", lang)
         count = len(get_enrollment_samples(user_id))
@@ -492,12 +503,14 @@ def verification():
         username = validate_username(body.get("username", ""))
         password = str(body.get("password", ""))
         user = get_user_by_username(username)
-        if not user:
-            # Neodhaľujeme, či účet existuje, ale auditujeme pokus s user_id=NULL.
+        if not user or not user["template_json"]:
+            # Neodhaľujeme, či účet existuje (ani či má nedokončenú registráciu), ale pokus auditujeme.
+            # Účet bez šablóny dostal vo verification/begin falošný challenge, takže by tu inak
+            # donekonečna končil na "neplatný challenge" a klient by si pýtal ďalšiu vetu.
             store_attempt(
-                user_id=None, username=username, actor=username, attempt_type="genuine",
-                impersonated=None, score=None, threshold=None, accepted=False, features=None,
-                challenge_id=None, reason="unknown_user",
+                user_id=int(user["id"]) if user else None, username=username, actor=username,
+                attempt_type="genuine", impersonated=None, score=None, threshold=None, accepted=False,
+                features=None, challenge_id=None, reason="not_enrolled" if user else "unknown_user",
             )
             return jsonify(error="Autentifikácia zlyhala."), 401
         user_id = int(user["id"])
@@ -545,8 +558,6 @@ def verification():
                 update_auth_state(user_id, False, settings.LOCKOUT_THRESHOLD, settings.LOCKOUT_SECONDS)
             return jsonify(result="ZAMIETNUTÝ", error="Detegovaný replay / identický vektor."), 401
 
-        if not user["template_json"]:
-            return jsonify(error="Autentifikácia zlyhala."), 401
         template = current_template(user)
         metric = settings.METRIC
         threshold = float(template["threshold"])

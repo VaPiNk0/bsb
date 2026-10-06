@@ -22,6 +22,8 @@ EXACT = {
     "Heslá sa nezhodujú": "The passwords do not match",
     "Používateľ už má vytvorenú šablónu.": "This user already has a template.",
     "Používateľ existuje, ale heslo nesedí.": "This user exists, but the password is wrong.",
+    "Registrácia tohto mena práve prebieha. Skús to znova.": "A sign-up with this username is in progress. Try again.",
+    "Na serveri nastala chyba. Skús to o chvíľu znova.": "The server ran into an error. Try again in a moment.",
     "Používateľ neexistuje": "This user does not exist",
     "Challenge je neplatný alebo expirovaný": "The challenge is invalid or expired",
     "Challenge je neplatný, použitý alebo expirovaný.": "The challenge is invalid, used or expired.",

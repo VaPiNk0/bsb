@@ -353,6 +353,25 @@ function showMessage(id, text, kind = "") {
   el.className = `${el.dataset.base || "message"} ${kind}`;
 }
 
+// Kým beží odoslanie formulára, ďalšie sa ignoruje: uspatý server odpovedá aj desiatky sekúnd
+// a druhé kliknutie by spustilo tú istú registráciu či prihlásenie dvakrát naraz.
+function submitOnce(form, action) {
+  let pending = false;
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (pending) return;
+    pending = true;
+    const button = form.querySelector("[type=submit]");
+    button.disabled = true;
+    try {
+      await action();
+    } finally {
+      pending = false;
+      button.disabled = false;
+    }
+  });
+}
+
 function setTab(name) {
   document.querySelectorAll(".tab").forEach((button) => button.classList.toggle("active", button.dataset.tab === name));
   document.querySelectorAll(".tab-panel").forEach((panel) => panel.classList.toggle("active", panel.id === `${name}Panel`));
@@ -616,7 +635,10 @@ async function submitVerification(events) {
     } else {
       // zlé heslo, zamknutý účet alebo limit pokusov: ďalšie písanie by nepomohlo
       $("resultCard").hidden = true;
-      endVerification(error.status === 401 ? t("Prihlásenie zlyhalo. Skontroluj meno a heslo.", "Login failed. Check the username and password.") : error.message);
+      endVerification(error.status === 401
+        ? t("Prihlásenie zlyhalo. Skontroluj meno a heslo. Ak registrácia nie je dokončená, dokonči ju najprv na karte Registrácia.",
+          "Login failed. Check the username and password. If the sign-up is not finished, finish it on the Sign up tab first.")
+        : error.message);
       if (error.status === 401) $("verifyPassword").select();
     }
   }
@@ -787,10 +809,10 @@ function setup() {
 
   document.querySelectorAll(".tab").forEach((button) => button.addEventListener("click", () => setTab(button.dataset.tab)));
 
-  $("enrollForm").addEventListener("submit", (event) => {
-    event.preventDefault();
-    startEnrollment();
-  });
+  // Systém meria držanie kláves, čo dotyková klávesnica neposkytuje (a plocha na písanie ju ani neotvorí).
+  $("touchNotice").hidden = !matchMedia("(hover: none) and (pointer: coarse)").matches;
+
+  submitOnce($("enrollForm"), startEnrollment);
   $("enrollSkip").addEventListener("click", () => enrollFlow.next());
   $("enrollFinish").addEventListener("click", finishEnrollment);
   $("enrollCancel").addEventListener("click", cancelEnrollment);
@@ -802,10 +824,7 @@ function setup() {
     $("verifyUsernameLabel").textContent = on ? t("Cieľový účet / koho napodobňuješ", "Target account / who you imitate") : t("Používateľské meno", "Username");
     if (on) $("verifyConsent").checked = true;
   });
-  $("verifyForm").addEventListener("submit", (event) => {
-    event.preventDefault();
-    startVerification();
-  });
+  submitOnce($("verifyForm"), startVerification);
   $("verifyNew").addEventListener("click", () => verifyFlow.next());
   $("verifyBack").addEventListener("click", () => endVerification());
 

@@ -28,6 +28,11 @@ IS_POSTGRES = bool(settings.DATABASE_URL)
 TABLES = ["users", "enrollment_samples", "challenges", "auth_attempts", "refresh_samples", "template_history"]
 _pool = None
 
+if IS_POSTGRES:
+    from psycopg import IntegrityError
+else:
+    from sqlite3 import IntegrityError
+
 
 class _Postgres:
     """Rovnaké rozhranie ako sqlite3.Connection.execute, len so zástupným znakom %s."""
@@ -47,8 +52,10 @@ def _postgres_pool():
 
         # Spojenie do Supabase stojí TLS handshake, preto sa drží v poole. prepare_threshold=None:
         # Supabase pooler v transakčnom režime nepodporuje pripravené príkazy.
+        # check: pooler nečinné spojenie zavrie; bez overenia by prvá požiadavka po pauze spadla (500).
         _pool = ConnectionPool(
             settings.DATABASE_URL, min_size=1, max_size=5, open=True,
+            check=ConnectionPool.check_connection,
             kwargs={"row_factory": dict_row, "prepare_threshold": None},
         )
     return _pool

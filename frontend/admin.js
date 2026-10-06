@@ -150,6 +150,7 @@ const EXCLUDED = {
   duplicate_feature_vector: "replay",
   insufficient_features: t("málo použiteľných kláves", "too few usable keys"),
   unknown_user: t("neznámy účet", "unknown account"),
+  not_enrolled: t("nedokončená registrácia", "unfinished sign-up"),
 };
 
 function numText(v, digits) {

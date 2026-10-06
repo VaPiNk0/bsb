@@ -100,6 +100,104 @@ def test_begin_does_not_reveal_unknown_user(client):
     assert set(real.get_json()) == set(fake.get_json())
 
 
+def test_unfinished_signup_fails_like_unknown_user(client):
+    """Účet bez šablóny nesmie končiť na "neplatný challenge": klient by si donekonečna pýtal novú vetu."""
+    body = {"username": "P02", "password": "dlhe-heslo-123", "password_confirm": "dlhe-heslo-123"}
+    assert client.post("/api/enrollment/begin", json=body, headers=c_h(client)).status_code == 200
+    unfinished = verify(client, "P02", "dlhe-heslo-123", random.Random(3))
+    unknown = verify(client, "nikto", "dlhe-heslo-123", random.Random(3))
+    assert unfinished.status_code == unknown.status_code == 401
+    assert unfinished.get_json() == unknown.get_json()
+
+
+def test_unfinished_signup_login_is_audited(client):
+    import backend.db as db
+    body = {"username": "P02", "password": "dlhe-heslo-123", "password_confirm": "dlhe-heslo-123"}
+    uid = client.post("/api/enrollment/begin", json=body, headers=c_h(client)).get_json()["user_id"]
+    verify(client, "P02", "dlhe-heslo-123", random.Random(3))
+    verify(client, "nikto", "dlhe-heslo-123", random.Random(3))
+    reasons = {row["username"]: row["reason"] for row in db.list_attempts(2)}
+    assert reasons == {"P02": "not_enrolled", "nikto": "unknown_user"}
+    # neúspešné pokusy na nedokončený účet ho nezamknú: lockout patrí až hotovému účtu
+    assert db.get_user(uid)["failed_count"] == 0
+
+
+def test_signup_can_continue_after_a_failed_login(client):
+    """Presne cesta testera: rozbehnutá registrácia, pokus o prihlásenie, potom dokončenie a prihlásenie."""
+    body = {"username": "P01", "password": "dlhe-heslo-123", "password_confirm": "dlhe-heslo-123"}
+    assert client.post("/api/enrollment/begin", json=body, headers=c_h(client)).status_code == 200
+    assert verify(client, "P01", "dlhe-heslo-123", random.Random(3)).status_code == 401
+    enroll(client)
+    r = verify(client, "P01", "dlhe-heslo-123", random.Random(50), jitter=5.0)
+    assert r.status_code == 200 and r.get_json()["accepted"] is True
+
+
+def test_concurrent_signup_of_one_name_is_not_a_server_error(client, monkeypatch):
+    """Dvojité odoslanie formulára: druhá požiadavka účet ešte nevidí, ale meno je už zabraté."""
+    import backend.app as appmod
+    import backend.db as db
+    body = {"username": "P02", "password": "dlhe-heslo-123", "password_confirm": "dlhe-heslo-123"}
+    assert client.post("/api/enrollment/begin", json=body, headers=c_h(client)).status_code == 200
+    with monkeypatch.context() as patch:
+        patch.setattr(appmod, "get_user_by_username", lambda username: None)
+        r = client.post("/api/enrollment/begin", json=body, headers=c_h(client))
+    assert r.status_code == 409 and "práve prebieha" in r.get_json()["error"]
+    assert len(db.list_users()) == 1
+    # po neúspešnej súbežnej požiadavke registrácia normálne pokračuje
+    assert client.post("/api/enrollment/begin", json=body, headers=c_h(client)).status_code == 200
+
+
+def test_unexpected_error_is_readable_json(client, monkeypatch):
+    import backend.app as appmod
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("databáza neodpovedá")
+
+    monkeypatch.setitem(appmod.app.config, "TESTING", False)   # inak test client výnimku prepustí von
+    monkeypatch.setattr(appmod, "make_challenge", broken)
+    body = {"username": "P02", "password": "dlhe-heslo-123", "password_confirm": "dlhe-heslo-123"}
+    r = client.post("/api/enrollment/begin", json=body, headers=c_h(client))
+    assert r.status_code == 500 and r.is_json
+    assert r.get_json() == {"error": "Na serveri nastala chyba. Skús to o chvíľu znova."}   # bez detailov výnimky
+    r = client.post("/api/enrollment/begin", json=body, headers={**c_h(client), "X-Lang": "en"})
+    assert r.get_json() == {"error": "The server ran into an error. Try again in a moment."}
+
+
+def test_postgres_pool_checks_connections_before_use(client, monkeypatch):
+    """Pooler nečinné spojenie zavrie; pool ho musí pred použitím overiť, inak prvá požiadavka spadne."""
+    psycopg_pool = pytest.importorskip("psycopg_pool")
+    import backend.db as db
+    if db.IS_POSTGRES:
+        pytest.skip("pool je skutočný, nastavenie sa overuje len so zástupným")
+
+    class FakePool:
+        made = []
+
+        def __init__(self, conninfo, **options):
+            self.options = options
+            FakePool.made.append(self)
+
+        @staticmethod
+        def check_connection(conn):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(psycopg_pool, "ConnectionPool", FakePool)
+    monkeypatch.setattr(db, "_pool", None)
+    assert db._postgres_pool() is db._postgres_pool()          # jeden pool na proces
+    assert len(FakePool.made) == 1
+    assert FakePool.made[0].options["check"] is FakePool.check_connection
+    assert FakePool.made[0].options["kwargs"]["prepare_threshold"] is None
+
+
+def test_page_warns_touch_devices_only_on_demand(client):
+    """Upozornenie na fyzickú klávesnicu je v stránke skryté; zobrazí ho až skript na dotykovom zariadení."""
+    html = client.get("/").get_data(as_text=True)
+    assert '<section class="notice" id="touchNotice" hidden>' in html
+
+
 def test_client_cannot_enable_test_mode(client):
     enroll(client)
     b = client.post("/api/verification/begin", json={"username": "P01"}, headers=c_h(client)).get_json()
