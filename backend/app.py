@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import io
 import json
 import math
 import re
@@ -10,7 +12,7 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from flask import Flask, jsonify, redirect, request, send_from_directory, session, url_for
+from flask import Flask, Response, jsonify, redirect, request, send_from_directory, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from .config import settings
@@ -33,6 +35,9 @@ from .db import (
     list_history,
     stamp_template,
     list_attempts,
+    list_enrollment_features,
+    list_report_attempts,
+    list_templates,
     list_users,
     recent_attempt_count,
     save_template,
@@ -41,6 +46,7 @@ from .db import (
 )
 from .drift import analyze_drift, decide_threshold
 from .features import FEATURE_COUNT, extract_features
+from .report import ATTEMPT_COLUMNS, SCENARIO_COLUMNS, USER_COLUMNS, build_report
 from .scoring import TEMPLATE_VERSION, build_template, score_vector
 from .sentences import next_phrase
 
@@ -246,6 +252,7 @@ def store_attempt(
     impersonated: str | None, score: float | None, threshold: float | None,
     accepted: bool, features: list[float] | None, challenge_id: int | None,
     replay: bool = False, reason: str | None = None, phrase: str | None = None,
+    test_mode: bool = False,
 ) -> None:
     digest = feature_hash(features) if features is not None else None
     insert_attempt(
@@ -265,6 +272,7 @@ def store_attempt(
             "replay_detected": 1 if replay else 0,
             "reason": reason,
             "ip": client_ip(),
+            "test_mode": 1 if test_mode else 0,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
     )
@@ -471,7 +479,7 @@ def verification():
             # Zamknutie odhalíme len tomu, kto pozná heslo; ostatní dostanú generickú chybu.
             store_attempt(
                 user_id=user_id, username=username, actor=actor, attempt_type=attempt_type,
-                impersonated=impersonated, score=None, threshold=None, accepted=False,
+                impersonated=impersonated, test_mode=test_mode, score=None, threshold=None, accepted=False,
                 features=None, challenge_id=int(challenge["id"]), reason="account_locked",
             )
             if password_ok:
@@ -480,7 +488,7 @@ def verification():
         if not password_ok:
             store_attempt(
                 user_id=user_id, username=username, actor=actor, attempt_type=attempt_type,
-                impersonated=impersonated, score=None, threshold=None, accepted=False,
+                impersonated=impersonated, test_mode=test_mode, score=None, threshold=None, accepted=False,
                 features=None, challenge_id=int(challenge["id"]), reason="password_failed",
             )
             if not test_mode or settings.ENFORCE_LOCKOUT_IN_TEST_MODE:
@@ -493,7 +501,7 @@ def verification():
         if duplicate_attempt_exists(user_id, digest):
             store_attempt(
                 user_id=user_id, username=username, actor=actor, attempt_type=attempt_type,
-                impersonated=impersonated, score=None, threshold=None, accepted=False,
+                impersonated=impersonated, test_mode=test_mode, score=None, threshold=None, accepted=False,
                 features=features, challenge_id=int(challenge["id"]), replay=True,
                 reason="duplicate_feature_vector", phrase=phrase,
             )
@@ -510,7 +518,7 @@ def verification():
         if not math.isfinite(score):
             store_attempt(
                 user_id=user_id, username=username, actor=actor, attempt_type=attempt_type,
-                impersonated=impersonated, score=None, threshold=None, accepted=False,
+                impersonated=impersonated, test_mode=test_mode, score=None, threshold=None, accepted=False,
                 features=features, challenge_id=int(challenge["id"]), reason="insufficient_features",
                 phrase=phrase,
             )
@@ -519,7 +527,7 @@ def verification():
         accepted = score <= threshold
         store_attempt(
             user_id=user_id, username=username, actor=actor, attempt_type=attempt_type,
-            impersonated=impersonated, score=score, threshold=threshold, accepted=accepted,
+            impersonated=impersonated, test_mode=test_mode, score=score, threshold=threshold, accepted=accepted,
             features=features, challenge_id=int(challenge["id"]), reason=None, phrase=phrase,
         )
 
@@ -556,6 +564,11 @@ def verification():
         return jsonify(error=str(exc)), 400
 
 
+def verification_report(attempts, users) -> dict:
+    thresholds = {int(row["id"]): float(json.loads(row["template_json"])["threshold"]) for row in list_templates()}
+    return build_report(attempts, users, list_enrollment_features(), thresholds)
+
+
 @app.get("/api/admin/overview")
 def admin_overview():
     current = session_admin()
@@ -568,6 +581,7 @@ def admin_overview():
         users.append(item)
     attempts = [dict(row) for row in list_attempts(100)]
     return jsonify(
+        report=verification_report(list_report_attempts(), users),
         current_user=current["username"],
         metric=settings.METRIC,
         k=settings.K,
@@ -579,6 +593,30 @@ def admin_overview():
         history=[dict(row) for row in list_history()],
         refresh_days=settings.TEMPLATE_REFRESH_DAYS,
         test_mode_allowed=settings.ALLOW_TEST_MODE,
+    )
+
+
+@app.get("/api/admin/report/<name>.csv")
+def admin_report_csv(name: str):
+    """Tabuľky výsledkov ako CSV do referátu (desatinná bodka, podiely v rozsahu 0–1)."""
+    if not session_admin():
+        return jsonify(error="Neautorizované"), 401 if "auth_user_id" not in session else 403
+    attempts = list_report_attempts()
+    if name == "attempts":
+        columns, rows = ATTEMPT_COLUMNS, [dict(row) for row in attempts]
+    elif name in ("scenarios", "users"):
+        report = verification_report(attempts, list_users())
+        columns, rows = (SCENARIO_COLUMNS, report["scenarios"]) if name == "scenarios" else (USER_COLUMNS, report["users"])
+    else:
+        return jsonify(error="Neznáma tabuľka"), 404
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=columns, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+    # BOM, aby Excel správne prečítal diakritiku v menách
+    return Response(
+        "﻿" + buffer.getvalue(), mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="keystroke_{name}.csv"'},
     )
 
 

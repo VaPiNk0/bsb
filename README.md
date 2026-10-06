@@ -143,6 +143,15 @@ Vzniknú:
 
 Poznámka k FAR 1 %: pri malom počte impostorov nemusí byť 1 % diskrétne dosiahnuteľné. Vtedy interpretuj výsledok ako „0 false accepts v malej testovacej vzorke“, nie ako dôkaz reálneho 1 % FAR.
 
+### Tabuľky výsledkov v admin paneli
+
+Admin panel počíta výsledky priamo z audit logu (`backend/report.py`), takže fungujú aj v nasadení s Postgresom, kde `evaluate.py` nemá SQLite súbor:
+
+- **Výsledky verifikácie** – pre genuine, impostor, imitáciu a útoky spolu: počet pokusov, prijaté/zamietnuté, FRR alebo FAR s 95 % Wilsonovým intervalom a medián skóre/prah; k tomu EER.
+- **Výsledky podľa účtu** – počet registračných viet, medián dwell a DD, prah, FRR a FAR na účet.
+
+Berie sa rozhodnutie, ktoré systém pri pokuse naozaj urobil (uložené skóre a vtedajší prah). Do FAR/FRR idú len pokusy s biometrickým skóre; zlé heslo, zamknutý účet a replay sú vykázané zvlášť. Genuine pokus mimo test mode nemá potvrdené, kto písal (predpokladá sa vlastník účtu), preto sa ukladá aj `test_mode`. Tabuľky sa dajú stiahnuť ako CSV (`/api/admin/report/scenarios.csv`, `users.csv`, `attempts.csv`; desatinná bodka, podiely 0–1).
+
 ## Diskusia limitov
 
 - **Malý dataset:** EER/FAR/FRR budú mať vysokú neistotu; jeden chybný pokus môže výrazne zmeniť percentá.

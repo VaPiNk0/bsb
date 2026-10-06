@@ -344,3 +344,24 @@ def test_admin_panel_is_limited_to_listed_accounts(client):
 
 def test_admin_panel_requires_login(client):
     assert client.get("/api/admin/overview").status_code == 401
+    assert client.get("/api/admin/report/scenarios.csv").status_code == 401
+
+
+def test_admin_report_matches_recorded_decisions(client):
+    enroll(client)
+    login(client)
+    assert verify(client, "P01", "dlhe-heslo-123", random.Random(5), sig=3, scale=2.0).status_code == 401
+    verify(client, "P01", "zle-heslo-xxx", random.Random(3))   # bez skóre, do FRR nepatrí
+
+    report = client.get("/api/admin/overview").get_json()["report"]
+    genuine = report["scenarios"][0]
+    assert (genuine["scenario"], genuine["n"], genuine["errors"], genuine["rate"]) == ("genuine", 2, 1, 0.5)
+    assert report["excluded"] == [{"reason": "password_failed", "n": 1}]
+    assert report["users"][0]["enrollment_n"] == 12 and report["users"][0]["median_dd_ms"] > 0
+
+    for name, first_column in (("scenarios", "scenario"), ("users", "username"), ("attempts", "id")):
+        r = client.get(f"/api/admin/report/{name}.csv")
+        assert r.status_code == 200 and r.mimetype == "text/csv"
+        lines = r.get_data(as_text=True).lstrip("﻿").splitlines()
+        assert lines[0].split(",")[0] == first_column and len(lines) > 1
+    assert client.get("/api/admin/report/nieco.csv").status_code == 404

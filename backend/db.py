@@ -146,6 +146,7 @@ def init_db() -> None:
                 replay_detected INTEGER NOT NULL DEFAULT 0,
                 reason TEXT,
                 ip TEXT,
+                test_mode INTEGER,
                 created_at TEXT NOT NULL
             );
 
@@ -195,7 +196,7 @@ def init_db() -> None:
         migrations = {
             "enrollment_samples": [("phrase", "TEXT"), ("cycle", "INTEGER NOT NULL DEFAULT 0")],
             "challenges": [("phrase", "TEXT")],
-            "auth_attempts": [("phrase", "TEXT")],
+            "auth_attempts": [("phrase", "TEXT"), ("test_mode", "INTEGER")],
             "users": [("template_updated_at", "TEXT"), ("template_cycle", "INTEGER NOT NULL DEFAULT 0")],
         }
         for table, wanted in migrations.items():
@@ -313,7 +314,7 @@ def insert_attempt(data: dict[str, Any]) -> int:
     columns = [
         "user_id", "username", "actor_label", "attempt_type", "impersonated_username",
         "score", "threshold", "accepted", "feature_json", "feature_hash", "phrase", "challenge_id",
-        "replay_detected", "reason", "ip", "created_at",
+        "replay_detected", "reason", "ip", "test_mode", "created_at",
     ]
     values = [data.get(column) for column in columns]
     with _connect() as conn:
@@ -361,6 +362,25 @@ def list_attempts(limit: int = 100) -> list[Any]:
             "ORDER BY id DESC LIMIT ?",
             (int(limit),),
         ).fetchall()
+
+
+def list_report_attempts() -> list[Any]:
+    """Všetky pokusy pre tabuľky výsledkov; bez IP, vety a vektora príznakov."""
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT id, created_at, user_id, username, actor_label, attempt_type, test_mode, score, threshold, "
+            "accepted, replay_detected, reason FROM auth_attempts ORDER BY id ASC"
+        ).fetchall()
+
+
+def list_templates() -> list[Any]:
+    with _connect() as conn:
+        return conn.execute("SELECT id, template_json FROM users WHERE template_json IS NOT NULL").fetchall()
+
+
+def list_enrollment_features() -> list[Any]:
+    with _connect() as conn:
+        return conn.execute("SELECT user_id, features_json FROM enrollment_samples").fetchall()
 
 
 # ---------- mesačná obnova šablóny ----------

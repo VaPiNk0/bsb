@@ -45,6 +45,7 @@ async function loadAdmin() {
   }));
 
   renderHistory(data.history || []);
+  renderReport(data.report);
   renderChart(data.attempts);
   document.getElementById("attemptsTable").innerHTML = data.attempts.map((a) => `
     <tr>
@@ -134,6 +135,80 @@ function renderHistory(history) {
   note.className = "muted";
   note.textContent = "nižšie = rýchlejšie písanie";
   legend.appendChild(note);
+}
+
+const SCENARIOS = {
+  genuine: "genuine (vlastník účtu)",
+  impostor: "impostor (vlastný štýl)",
+  imitacia: "imitácia",
+  attacks_total: "útoky spolu",
+};
+const EXCLUDED = {
+  password_failed: "nesprávne heslo",
+  account_locked: "zamknutý účet",
+  replay: "replay",
+  insufficient_features: "málo použiteľných kláves",
+  unknown_user: "neznámy účet",
+};
+
+function numText(v, digits) {
+  return v === null || v === undefined ? "—"
+    : Number(v).toLocaleString("sk-SK", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
+function rateText(v) {
+  return v === null || v === undefined ? "—" : `${numText(v * 100, 1)} %`;
+}
+
+function rateWithCounts(rate, errors, n) {
+  return n ? `${rateText(rate)} (${errors}/${n})` : "—";
+}
+
+function renderReport(report) {
+  const genuine = report.scenarios.find((s) => s.scenario === "genuine");
+  const attacks = report.scenarios.find((s) => s.scenario === "attacks_total");
+  const stats = [
+    ["FRR", rateWithCounts(genuine.rate, genuine.errors, genuine.n)],
+    ["FAR", rateWithCounts(attacks.rate, attacks.errors, attacks.n)],
+    ["EER", rateText(report.eer)],
+    ["Vyhodnotené pokusy", `${report.scored} · účty ${report.accounts} · testeri ${report.testers}`],
+  ];
+  document.getElementById("reportStats").innerHTML = stats.map(([label, value]) => `<div class="stat"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
+
+  document.getElementById("scenarioTable").innerHTML = report.scenarios.map((s) => `
+    <tr>
+      <td>${escapeHtml(SCENARIOS[s.scenario] || s.scenario)}</td>
+      <td class="num">${s.n}</td>
+      <td class="num">${s.accepted}</td>
+      <td class="num">${s.rejected}</td>
+      <td>${s.measure}</td>
+      <td class="num">${rateText(s.rate)}</td>
+      <td class="num">${s.n ? `${numText(s.ci_low * 100, 1)} – ${numText(s.ci_high * 100, 1)} %` : "—"}</td>
+      <td class="num">${numText(s.median_ratio, 2)}</td>
+    </tr>`).join("");
+
+  const notes = [];
+  if (genuine.n) notes.push(`Z ${genuine.n} genuine pokusov je ${report.genuine_labeled} označených v testovacom režime; pri ostatných sa predpokladá, že písal vlastník účtu.`);
+  if (!attacks.n) notes.push("FAR a EER sa nedajú určiť, kým nie sú pokusy typu impostor alebo imitácia (zbierajú sa v testovacom režime).");
+  if (report.excluded_total) {
+    const reasons = report.excluded.map((e) => `${EXCLUDED[e.reason] || e.reason} ${e.n}`).join(", ");
+    notes.push(`Mimo vyhodnotenia je ${report.excluded_total} pokusov bez biometrického skóre: ${reasons}.`);
+  }
+  notes.push("Interval je 95 % Wilsonov; EER je bod, kde sa FAR a FRR vyrovnajú pri spoločnom násobku prahov.");
+  document.getElementById("reportNote").textContent = notes.join(" ");
+
+  document.getElementById("userResultsTable").innerHTML = report.users.map((u) => `
+    <tr>
+      <td>${escapeHtml(u.username)}</td>
+      <td class="num">${u.enrollment_n}</td>
+      <td class="num">${u.median_dwell_ms === null ? "—" : `${numText(u.median_dwell_ms, 0)} ms`}</td>
+      <td class="num">${u.median_dd_ms === null ? "—" : `${numText(u.median_dd_ms, 0)} ms`}</td>
+      <td class="num">${numText(u.threshold, 3)}</td>
+      <td class="num">${rateWithCounts(u.frr, u.genuine_rejected, u.genuine_n)}</td>
+      <td class="num">${rateWithCounts(u.far, u.attack_accepted, u.attack_n)}</td>
+      <td class="num">${numText(u.genuine_median_ratio, 2)}</td>
+      <td class="num">${numText(u.attack_median_ratio, 2)}</td>
+    </tr>`).join("");
 }
 
 function renderChart(attempts) {

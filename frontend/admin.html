@@ -27,6 +27,24 @@
     </section>
 
     <section class="panel">
+      <div class="panel-header">
+        <div><h2>Výsledky verifikácie</h2><p>Počítané z pokusov, ktoré prešli heslom a dostali biometrické skóre. FRR = zamietnutý vlastník účtu, FAR = prijatý útočník, ktorý pozná heslo.</p></div>
+        <div class="form-actions"><a class="secondary" href="/api/admin/report/scenarios.csv">CSV scenáre</a><a class="secondary" href="/api/admin/report/attempts.csv">CSV pokusy</a></div>
+      </div>
+      <div class="stats-grid" id="reportStats"></div>
+      <div class="table-wrap"><table><thead><tr><th>Scenár</th><th>Pokusy</th><th>Prijaté</th><th>Zamietnuté</th><th>Miera</th><th>Hodnota</th><th>95 % interval</th><th>Medián skóre / prah</th></tr></thead><tbody id="scenarioTable"></tbody></table></div>
+      <p class="muted table-note" id="reportNote"></p>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <div><h2>Výsledky podľa účtu</h2><p>Profil písania z registračných viet a chybovosť na každom účte. V zátvorke chyby / pokusy.</p></div>
+        <div class="form-actions"><a class="secondary" href="/api/admin/report/users.csv">CSV účty</a></div>
+      </div>
+      <div class="table-wrap"><table><thead><tr><th>Účet</th><th>Vzorky</th><th>Medián dwell</th><th>Medián DD</th><th>Prah</th><th>FRR</th><th>FAR</th><th>Skóre / prah genuine</th><th>Skóre / prah útok</th></tr></thead><tbody id="userResultsTable"></tbody></table></div>
+    </section>
+
+    <section class="panel">
       <div class="panel-header"><h2>Používatelia</h2></div>
       <div class="table-wrap"><table><thead><tr><th>Meno</th><th>Vzorky</th><th>Šablóna</th><th>Cyklus</th><th>Obnova šablóny</th><th>Fail count</th><th>Lock</th><th></th></tr></thead><tbody id="usersTable"></tbody></table></div>
     </section>
