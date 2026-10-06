@@ -171,7 +171,7 @@ function renderReport(report) {
     ["FRR", rateWithCounts(genuine.rate, genuine.errors, genuine.n)],
     ["FAR", rateWithCounts(attacks.rate, attacks.errors, attacks.n)],
     ["EER", rateText(report.eer)],
-    ["Vyhodnotené pokusy", `${report.scored} · účty ${report.accounts} · testeri ${report.testers}`],
+    ["Vyhodnotené pokusy", String(report.scored)],
   ];
   document.getElementById("reportStats").innerHTML = stats.map(([label, value]) => `<div class="stat"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
 
@@ -194,6 +194,7 @@ function renderReport(report) {
     const reasons = report.excluded.map((e) => `${EXCLUDED[e.reason] || e.reason} ${e.n}`).join(", ");
     notes.push(`Mimo vyhodnotenia je ${report.excluded_total} pokusov bez biometrického skóre: ${reasons}.`);
   }
+  notes.push(`Pokusy sú z ${report.accounts} účtov od ${report.testers} testerov.`);
   notes.push("Interval je 95 % Wilsonov; EER je bod, kde sa FAR a FRR vyrovnajú pri spoločnom násobku prahov.");
   document.getElementById("reportNote").textContent = notes.join(" ");
 

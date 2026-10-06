@@ -267,4 +267,6 @@ Prehliadač komunikuje len s doménou Pages (rovnaký pôvod, takže cookies a C
 
 Testy proti Postgresu: `TEST_DATABASE_URL=postgresql://... pytest tests/test_api.py` (tabuľky v danej DB sa zmažú). Bezplatný Render uspáva službu po 15 minútach nečinnosti; prvá požiadavka potom trvá desiatky sekúnd.
 
+**Po prihlásení.** Bežného používateľa stránka po úspešnom overení presmeruje na `LOGIN_REDIRECT_URL` (default `https://www.google.sk/`, prázdna hodnota presmerovanie vypne). Admin a pokusy v test mode ostávajú v aplikácii; ak je splatná mesačná obnova šablóny, presmeruje sa až po nej alebo po kliknutí na „Neskôr".
+
 **Admin panel.** `ADMIN_USERS` (mená oddelené čiarkou) určuje, ktoré účty smú do admin panela; ostatní prihlásení používatelia dostanú 403 a odkaz na panel sa im nezobrazí. Lokálne je premenná prázdna a panel vidí každý prihlásený používateľ. Registrácia je otvorená a meno účtu si môže zabrať ktokoľvek, preto si admin účet zaregistruj hneď po nasadení.

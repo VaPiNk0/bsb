@@ -71,6 +71,9 @@ class Settings:
         name.strip() for name in os.getenv("ADMIN_USERS", "").split(",") if name.strip()
     )
 
+    # Kam ide po úspešnom prihlásení bežný používateľ (admin ostáva v aplikácii). Prázdne = nikam.
+    LOGIN_REDIRECT_URL: str = os.getenv("LOGIN_REDIRECT_URL", "https://www.google.sk/")
+
     SECRET_KEY: str = os.getenv("SECRET_KEY") or secrets.token_hex(32)
     DB_PATH: str = os.getenv("DB_PATH", str(PROJECT_ROOT / "data" / "keystroke.db"))
     # Postgres (Supabase) connection string; ak je nastavený, použije sa namiesto SQLite súboru.

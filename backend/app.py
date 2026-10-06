@@ -556,6 +556,8 @@ def verification():
             metric=metric,
             test_mode=test_mode,
             is_admin=accepted and is_admin(username),
+            # overený používateľ je "pustený na internet"; admin a testovacie pokusy ostávajú v aplikácii
+            redirect=settings.LOGIN_REDIRECT_URL if accepted and not test_mode and not is_admin(username) else None,
             refresh=refresh_info(get_user(user_id)) if accepted else None,
         ), (200 if accepted else 401)
     except PermissionError as exc:

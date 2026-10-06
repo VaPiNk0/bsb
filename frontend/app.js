@@ -3,7 +3,56 @@ let BOOT = null;
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz ";
 const RETRY_DELAY_MS = 1100;   // koľko nechať svietiť dôvod, kým príde nová veta
 
+const TAPE_MIN_MS = 8000;      // najkratší úsek, ktorý páska ukáže; dlhšia veta sa do nej zmestí celá
+
 const $ = (id) => document.getElementById(id);
+
+// Páska: každé stlačenie je značka, ktorej dĺžka je držanie klávesy a poloha čas stlačenia.
+// Značky sa striedajú v dvoch riadkoch, takže je vidno aj prekryv dvoch kláves.
+// `replay` ich nechá objaviť sa v čase, v akom boli stlačené.
+function drawTape(el, strokes, span, replay = false) {
+  const step = span > 20000 ? 5000 : span > 10000 ? 2000 : 1000;
+  const nodes = [];
+  for (let t = step; t < span; t += step) {
+    const tick = document.createElement("i");
+    tick.className = "tick";
+    tick.dataset.t = `${t / 1000} s`;
+    tick.style.left = `${(t / span) * 100}%`;
+    nodes.push(tick);
+  }
+  strokes.forEach((stroke, i) => {
+    const mark = document.createElement("i");
+    mark.className = `mark${i % 2 ? " low" : ""}${stroke.kept === false ? " void" : ""}`;
+    mark.dataset.key = stroke.key === " " ? "␣" : stroke.key;
+    mark.style.left = `${(stroke.down / span) * 100}%`;
+    mark.style.width = `${((stroke.up - stroke.down) / span) * 100}%`;
+    if (replay) mark.style.animationDelay = `${Math.round(stroke.down)}ms`;
+    nodes.push(mark);
+  });
+  el.classList.toggle("replay", replay);
+  el.replaceChildren(...nodes);
+}
+
+// Ukážka v úvode: vymyslený, ale opakovateľný rytmus dvoch ľudí pri tej istej vete.
+function demoStrokes(phrase, seed, hold, gap) {
+  let state = seed;
+  const random = () => (state = (state * 1664525 + 1013904223) >>> 0) / 4294967296;
+  let t = 250;
+  return Array.from(phrase, (key) => {
+    const stroke = { key, down: t, up: t + hold * (0.7 + random() * 0.6) };
+    t += gap * (0.55 + random() * 0.9) * (key === " " ? 1.5 : 1);
+    return stroke;
+  });
+}
+
+function drawDemo() {
+  const phrase = "rytmus pisania je ako podpis";
+  const a = demoStrokes(phrase, 7, 70, 125);
+  const b = demoStrokes(phrase, 31, 150, 230);
+  const span = Math.ceil((b[b.length - 1].up + 400) / 1000) * 1000;
+  drawTape($("demoTapeA"), a, span, true);
+  drawTape($("demoTapeB"), b, span, true);
+}
 
 // Plocha na prepis vety: veta je predpísaná bledo, napísané znaky sa do nej "vfarbujú"
 // a kurzor sa posúva plynulo. Zároveň zbiera časovanie kláves (down/up) pre backend.
@@ -21,7 +70,6 @@ class TypingCapture {
 
     this.phrase = "";
     this.cells = [];
-    this.slots = [];
     this.held = new Map();      // event.code -> index v this.events (klávesa je ešte dole)
     this.onComplete = null;
     this.onInvalid = null;
@@ -74,10 +122,6 @@ class TypingCapture {
     this.extra.className = "ch bad";
     // kurzor je vnútri textu, aby mal rovnaký súradnicový systém ako znaky (aj počas animácie)
     this.text.replaceChildren(...this.cells, this.extra, this.caret);
-    if (this.rhythmEl) {
-      this.rhythmEl.innerHTML = Array.from(phrase, () => '<div class="slot"><div class="bar dwell"></div><div class="bar dd"></div></div>').join("");
-      this.slots = Array.from(this.rhythmEl.children);
-    }
     this.state = "active";
     this.t0 = performance.now();
     // znovu spustí animáciu príchodu vety
@@ -144,20 +188,19 @@ class TypingCapture {
   }
 
   paintRhythm() {
-    if (this.slots.length) {
-      const surv = this.survivors();
-      this.slots.forEach((slot, pos) => {
-        const idx = surv[pos];
-        const e = idx === undefined ? null : this.events[idx];
-        const prevIdx = surv[pos - 1];
-        const [dwell, dd] = slot.children;
-        const hasDwell = !!e && Number.isFinite(e.up);
-        dwell.classList.toggle("on", hasDwell);
-        dwell.style.height = hasDwell ? `${Math.min(100, 2 + (e.up - e.down) * 0.55)}px` : "2px";
-        const hasDd = !!e && prevIdx !== undefined && prevIdx === idx - 1;
-        dd.classList.toggle("on", hasDd);
-        dd.style.height = hasDd ? `${Math.min(100, 2 + Math.max(0, e.down - this.events[prevIdx].down) * 0.3)}px` : "2px";
-      });
+    if (this.rhythmEl) {
+      const kept = new Set(this.survivors());
+      // klávesa, ktorá je ešte dole, má zatiaľ nulovú dĺžku
+      // páska začína tesne pred prvým stlačením, nie čakaním, kým človek začne písať
+      const origin = this.events.length ? this.events[0].down - 200 : 0;
+      const strokes = this.events.map((e, i) => ({
+        key: e.key === "Backspace" ? "←" : e.key,
+        down: e.down - origin,
+        up: (Number.isFinite(e.up) ? e.up : e.down) - origin,
+        kept: kept.has(i),
+      }));
+      const end = strokes.length ? strokes[strokes.length - 1].up : 0;
+      drawTape(this.rhythmEl, strokes, Math.max(TAPE_MIN_MS, end * 1.05));
     }
     if (this.tempoEl) {
       const typed = this.buffer.length;
@@ -168,7 +211,7 @@ class TypingCapture {
         const minutes = (last.down - first.down) / 60000;
         text = `${Math.round(typed / 5 / minutes)} slov/min`;
       }
-      if (this.corrections) text += ` · opravy: ${this.corrections}`;
+      if (this.corrections) text += `, opravy: ${this.corrections}`;
       this.tempoEl.textContent = text;
     }
   }
@@ -520,7 +563,7 @@ async function startVerification() {
   try {
     const phrase = await fetchVerifyPhrase();
     $("verifyActiveUser").textContent = verifyState.testMode
-      ? `${verifyState.username} · ${verifyState.attemptType} (${verifyState.actor})`
+      ? `${verifyState.username}, ${verifyState.attemptType} (${verifyState.actor})`
       : verifyState.username;
     $("resultCard").hidden = true;
     $("refreshCard").hidden = true;
@@ -547,7 +590,11 @@ async function submitVerification(events) {
     });
     renderResult(data);
     endVerification("Oba faktory prešli.", "success");
-    if (data.refresh && data.refresh.due) showRefreshOffer(data.refresh);
+    const refreshDue = !!(data.refresh && data.refresh.due);
+    if (refreshDue) showRefreshOffer(data.refresh);
+    // bežný používateľ po overení odchádza na internet; ponuka obnovy šablóny má prednosť
+    leaveTo = data.redirect || null;
+    if (!refreshDue) leaveAfterLogin("verifyMessage", "Oba faktory prešli.");
   } catch (error) {
     const data = error.data || {};
     if (error.status === 401 && data.result) {
@@ -587,6 +634,17 @@ function renderResult(data) {
   fill.style.width = "0";
   const ratio = hasScore ? data.score / data.threshold : 2;
   requestAnimationFrame(() => requestAnimationFrame(() => { fill.style.width = `${Math.min(100, ratio * 50)}%`; }));
+}
+
+const LEAVE_DELAY_MS = 2500;   // nech si človek stihne prečítať výsledok
+let leaveTo = null;
+
+function leaveAfterLogin(messageId, text, delay = LEAVE_DELAY_MS) {
+  if (!leaveTo) return;
+  const url = leaveTo;
+  leaveTo = null;
+  showMessage(messageId, `${text} O chvíľu ťa presmerujem na ${new URL(url).hostname}.`, "success");
+  setTimeout(() => location.assign(url), delay);
 }
 
 // ---------- mesačná obnova šablóny ----------
@@ -667,6 +725,7 @@ async function finishRefresh() {
     $("reportThreshold").textContent = `${r.old_threshold.toFixed(3)} → ${r.new_threshold.toFixed(3)}`;
     $("refreshReport").hidden = false;
     showMessage("refreshMessage", "");
+    leaveAfterLogin("refreshMessage", "Šablóna je obnovená.", LEAVE_DELAY_MS * 3);
   } catch (error) {
     refreshFlow.status(error.message, "error");
   }
@@ -701,9 +760,10 @@ function buildFlows() {
 }
 
 function setup() {
+  drawDemo();
   fetch("/api/bootstrap").then((r) => r.json()).then((boot) => {
     BOOT = boot;
-    $("configPill").textContent = `${boot.metric} · k = ${boot.k}`;
+    $("configPill").textContent = `metrika ${boot.metric}, k = ${boot.k}`;
     $("testModeRow").hidden = !boot.test_mode_allowed;
     buildFlows();
     setupTurnstile();
@@ -741,7 +801,10 @@ function setup() {
     $("refreshCapture").hidden = false;
     refreshFlow.next();
   });
-  $("refreshLater").addEventListener("click", () => { $("refreshCard").hidden = true; });
+  $("refreshLater").addEventListener("click", () => {
+    $("refreshCard").hidden = true;
+    leaveAfterLogin("verifyMessage", "Oba faktory prešli.", 800);
+  });
 }
 
 document.addEventListener("DOMContentLoaded", setup);
