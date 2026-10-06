@@ -103,6 +103,7 @@ def init_db() -> None:
                 template_json TEXT,
                 failed_count INTEGER NOT NULL DEFAULT 0,
                 lock_until TEXT,
+                phrase_lang TEXT,
                 created_at TEXT NOT NULL
             );
 
@@ -197,7 +198,7 @@ def init_db() -> None:
             "enrollment_samples": [("phrase", "TEXT"), ("cycle", "INTEGER NOT NULL DEFAULT 0")],
             "challenges": [("phrase", "TEXT")],
             "auth_attempts": [("phrase", "TEXT"), ("test_mode", "INTEGER")],
-            "users": [("template_updated_at", "TEXT"), ("template_cycle", "INTEGER NOT NULL DEFAULT 0")],
+            "users": [("template_updated_at", "TEXT"), ("template_cycle", "INTEGER NOT NULL DEFAULT 0"), ("phrase_lang", "TEXT")],
         }
         for table, wanted in migrations.items():
             columns = _columns(conn, table)
@@ -226,12 +227,12 @@ def get_user(user_id: int) -> Any | None:
         return conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
 
 
-def create_user(username: str, password_hash: str) -> int:
+def create_user(username: str, password_hash: str, phrase_lang: str | None = None) -> int:
     with _connect() as conn:
         return _insert(
             conn,
-            "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
-            (username, password_hash, now_iso()),
+            "INSERT INTO users (username, password_hash, phrase_lang, created_at) VALUES (?, ?, ?, ?)",
+            (username, password_hash, phrase_lang, now_iso()),
         )
 
 

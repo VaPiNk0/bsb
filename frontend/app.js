@@ -46,7 +46,7 @@ function demoStrokes(phrase, seed, hold, gap) {
 }
 
 function drawDemo() {
-  const phrase = "rytmus pisania je ako podpis";
+  const phrase = t("rytmus pisania je ako podpis", "typing rhythm works like a signature");
   const a = demoStrokes(phrase, 7, 70, 125);
   const b = demoStrokes(phrase, 31, 150, 230);
   const span = Math.ceil((b[b.length - 1].up + 400) / 1000) * 1000;
@@ -84,13 +84,13 @@ class TypingCapture {
     this.root.addEventListener("keyup", (event) => this.keyup(event));
     this.root.addEventListener("paste", (event) => {
       event.preventDefault();
-      this.invalid("Vkladanie textu nie je povolené.");
+      this.invalid(t("Vkladanie textu nie je povolené.", "Pasting text is not allowed."));
     });
     this.root.addEventListener("drop", (event) => event.preventDefault());
     this.root.addEventListener("contextmenu", (event) => event.preventDefault());
     // Rozpísaná veta s prerušením by mala skreslené časy; nezačatú vetu prepnutie okna nekazí.
     window.addEventListener("blur", () => {
-      if (this.active && this.started) this.invalid("Okno stratilo fokus uprostred vety.");
+      if (this.active && this.started) this.invalid(t("Okno stratilo fokus uprostred vety.", "The window lost focus in the middle of the sentence."));
     });
     window.addEventListener("resize", () => this.moveCaret());
   }
@@ -209,9 +209,9 @@ class TypingCapture {
       let text = "—";
       if (typed > 3 && first && last && last.down > first.down) {
         const minutes = (last.down - first.down) / 60000;
-        text = `${Math.round(typed / 5 / minutes)} slov/min`;
+        text = `${Math.round(typed / 5 / minutes)} ${t("slov/min", "wpm")}`;
       }
-      if (this.corrections) text += `, opravy: ${this.corrections}`;
+      if (this.corrections) text += `, ${t("opravy", "corrections")}: ${this.corrections}`;
       this.tempoEl.textContent = text;
     }
   }
@@ -228,18 +228,18 @@ class TypingCapture {
     event.preventDefault();
     if (!this.active || event.repeat) return;
     if (event.ctrlKey || event.metaKey || event.altKey) {
-      this.invalid("Klávesové skratky pokus zneplatnia.");
+      this.invalid(t("Klávesové skratky pokus zneplatnia.", "Keyboard shortcuts invalidate the attempt."));
       return;
     }
     if (event.key === "Shift" || event.key === "CapsLock") {
-      this.invalid("Píš len malé písmená (bez Shiftu, vypni Caps Lock).");
+      this.invalid(t("Píš len malé písmená (bez Shiftu, vypni Caps Lock).", "Type lowercase letters only (no Shift, turn off Caps Lock)."));
       return;
     }
 
     if (event.key === "Backspace") {
       if (this.buffer.length === 0 || this.held.has(event.code)) return;
       if (this.corrections >= BOOT.max_corrections) {
-        this.invalid("Príliš veľa opráv.");
+        this.invalid(t("Príliš veľa opráv.", "Too many corrections."));
         return;
       }
       this.corrections += 1;
@@ -252,7 +252,7 @@ class TypingCapture {
     // ostatné nepísmenové klávesy (šípky, Enter...) ticho ignorujeme
     if (event.key.length !== 1) return;
     if (!ALPHABET.includes(event.key)) {
-      this.onHint?.("Používaj len malé písmená bez diakritiky a medzeru.");
+      this.onHint?.(t("Používaj len malé písmená bez diakritiky a medzeru.", "Use only lowercase letters without accents and the space bar."));
       return;
     }
     if (this.buffer.length >= this.phrase.length + 6 || this.held.has(event.code)) return;
@@ -298,7 +298,7 @@ function renderTurnstile() {
     box.hidden = false;
     if (turnstileWidgets[name] !== undefined) window.turnstile.remove(turnstileWidgets[name]);
     turnstileWidgets[name] = window.turnstile.render(box, {
-      sitekey: BOOT.turnstile_site_key, language: "sk", theme: document.documentElement.dataset.theme || "auto",
+      sitekey: BOOT.turnstile_site_key, language: LANG, theme: document.documentElement.dataset.theme || "auto",
     });
   }
 }
@@ -328,7 +328,7 @@ function resetTurnstile(name) {
 // ---------- pomocné ----------
 
 async function api(path, body = null, method = "POST", retry = true) {
-  const options = { method, headers: { "Content-Type": "application/json", "X-CSRF-Token": BOOT.csrf } };
+  const options = { method, headers: { "Content-Type": "application/json", "X-CSRF-Token": BOOT.csrf, "X-Lang": LANG } };
   if (body !== null) options.body = JSON.stringify(body);
   const response = await fetch(path, options);
   const data = await response.json().catch(() => ({}));
@@ -365,6 +365,8 @@ function segments(id, count, total) {
 
 // Jeden "tok" písania (registrácia / prihlásenie / obnova): stará sa o to, aby po neúspešnom
 // pokuse, zneplatnení alebo expirácii challenge prišla automaticky nová veta.
+const NEW_SENTENCE = t("Pripravujem novú vetu…", "Getting a new sentence…");
+
 class Flow {
   constructor(capture, statusId, hint, fetchPhrase) {
     this.capture = capture;
@@ -376,7 +378,7 @@ class Flow {
     this.expiry = null;
     capture.onStart = () => this.status(this.hint);
     capture.onHint = (message) => this.status(message, "info");
-    capture.onInvalid = (message) => this.retry(`${message} Pripravujem novú vetu…`);
+    capture.onInvalid = (message) => this.retry(`${message} ${NEW_SENTENCE}`);
   }
 
   status(text, kind = "") { showMessage(this.statusId, text, kind); }
@@ -491,10 +493,10 @@ async function sendEnrollment(events) {
       await finishEnrollment();
       return;
     }
-    enrollFlow.status(`Vzorka ${data.count} uložená. Pokračuj ďalšou vetou.`, "success");
+    enrollFlow.status(t(`Vzorka ${data.count} uložená. Pokračuj ďalšou vetou.`, `Sample ${data.count} saved. Continue with the next sentence.`), "success");
     await enrollFlow.next(true);
   } catch (error) {
-    enrollFlow.retry(`${error.message} Táto vzorka sa nepočíta, pripravujem novú vetu…`);
+    enrollFlow.retry(`${error.message} ${t("Táto vzorka sa nepočíta, pripravujem novú vetu…", "This sample does not count, getting a new sentence…")}`);
   }
 }
 
@@ -510,7 +512,8 @@ async function finishEnrollment() {
     $("verifyPassword").value = enrollState.password;
     enrollState = null;
     setTab("verification");
-    showMessage("verifyMessage", `Registrácia je hotová (${data.count} vzoriek, prah ${data.threshold.toFixed(3)}). Môžeš sa prihlásiť.`, "success");
+    showMessage("verifyMessage", t(`Registrácia je hotová (${data.count} vzoriek, prah ${data.threshold.toFixed(3)}). Môžeš sa prihlásiť.`,
+      `Sign-up is complete (${data.count} samples, threshold ${data.threshold.toFixed(3)}). You can log in now.`), "success");
   } catch (error) {
     enrollFlow.status(error.message, "error");
   }
@@ -521,10 +524,12 @@ function cancelEnrollment() {
   enrollState = null;
   showEnrollCapture(false);
   $("enrollCounter").textContent = `0 / ${BOOT.min_enrollment}`;
-  showMessage("enrollMessage", "Registrácia je prerušená. Uložené vzorky zostali; s rovnakým menom a heslom v nej môžeš pokračovať.", "info");
+  showMessage("enrollMessage", t("Registrácia je prerušená. Uložené vzorky zostali; s rovnakým menom a heslom v nej môžeš pokračovať.", "Sign-up is paused. Saved samples are kept; you can continue with the same username and password."), "info");
 }
 
 // ---------- prihlásenie ----------
+
+const BOTH_PASSED = t("Oba faktory prešli.", "Both factors passed.");
 
 let verifyFlow;
 let verifyState = null;
@@ -556,7 +561,7 @@ async function startVerification() {
     attemptType: $("attemptType").value,
   };
   if (verifyState.testMode && !verifyState.actor) {
-    showMessage("verifyMessage", "V testovacom móde vyplň Tester ID.", "error");
+    showMessage("verifyMessage", t("V testovacom móde vyplň Tester ID.", "Fill in the tester ID in test mode."), "error");
     $("actorLabel").focus();
     return;
   }
@@ -577,7 +582,7 @@ async function startVerification() {
 }
 
 async function submitVerification(events) {
-  verifyFlow.status("Vyhodnocujem…", "info");
+  verifyFlow.status(t("Vyhodnocujem…", "Evaluating…"), "info");
   try {
     const data = await api("/api/verification", {
       username: verifyState.username,
@@ -589,28 +594,29 @@ async function submitVerification(events) {
       attempt_type: verifyState.attemptType,
     });
     renderResult(data);
-    endVerification("Oba faktory prešli.", "success");
+    endVerification(BOTH_PASSED, "success");
     const refreshDue = !!(data.refresh && data.refresh.due);
     if (refreshDue) showRefreshOffer(data.refresh);
     // bežný používateľ po overení odchádza na internet; ponuka obnovy šablóny má prednosť
     leaveTo = data.redirect || null;
-    if (!refreshDue) leaveAfterLogin("verifyMessage", "Oba faktory prešli.");
+    if (!refreshDue) leaveAfterLogin("verifyMessage", BOTH_PASSED);
   } catch (error) {
     const data = error.data || {};
     if (error.status === 401 && data.result) {
       // biometria neprešla: výsledok ukážeme a rovno pripravíme ďalší pokus s inou vetou
       renderResult(data);
       const why = Number.isFinite(data.score)
-        ? `Rytmus nesedel (skóre ${data.score.toFixed(3)}, prah ${data.threshold.toFixed(3)}).`
-        : data.error || "Pokus bol zamietnutý.";
-      verifyFlow.retry(`${why} Skús to znova s novou vetou.`);
+        ? t(`Rytmus nesedel (skóre ${data.score.toFixed(3)}, prah ${data.threshold.toFixed(3)}).`,
+          `The rhythm did not match (score ${data.score.toFixed(3)}, threshold ${data.threshold.toFixed(3)}).`)
+        : data.error || t("Pokus bol zamietnutý.", "The attempt was rejected.");
+      verifyFlow.retry(`${why} ${t("Skús to znova s novou vetou.", "Try again with a new sentence.")}`);
     } else if (error.status === 400) {
       // expirovaný challenge, príliš málo použiteľných kláves a pod.: stačí nová veta
-      verifyFlow.retry(`${error.message} Pripravujem novú vetu…`);
+      verifyFlow.retry(`${error.message} ${NEW_SENTENCE}`);
     } else {
       // zlé heslo, zamknutý účet alebo limit pokusov: ďalšie písanie by nepomohlo
       $("resultCard").hidden = true;
-      endVerification(error.status === 401 ? "Prihlásenie zlyhalo. Skontroluj meno a heslo." : error.message);
+      endVerification(error.status === 401 ? t("Prihlásenie zlyhalo. Skontroluj meno a heslo.", "Login failed. Check the username and password.") : error.message);
       if (error.status === 401) $("verifyPassword").select();
     }
   }
@@ -619,7 +625,7 @@ async function submitVerification(events) {
 function renderResult(data) {
   const card = $("resultCard");
   const hasScore = Number.isFinite(data.score) && Number.isFinite(data.threshold) && data.threshold > 0;
-  $("resultText").textContent = data.result || "ZAMIETNUTÝ";
+  $("resultText").textContent = data.accepted ? t("AUTENTIFIKOVANÝ", "AUTHENTICATED") : t("ZAMIETNUTÝ", "REJECTED");
   $("resultScore").textContent = Number.isFinite(data.score) ? data.score.toFixed(3) : "—";
   $("resultThreshold").textContent = Number.isFinite(data.threshold) ? data.threshold.toFixed(3) : "—";
   $("resultMetric").textContent = data.metric || BOOT.metric;
@@ -643,7 +649,8 @@ function leaveAfterLogin(messageId, text, delay = LEAVE_DELAY_MS) {
   if (!leaveTo) return;
   const url = leaveTo;
   leaveTo = null;
-  showMessage(messageId, `${text} O chvíľu ťa presmerujem na ${new URL(url).hostname}.`, "success");
+  const host = new URL(url).hostname;
+  showMessage(messageId, `${text} ${t(`O chvíľu ťa presmerujem na ${host}.`, `Redirecting you to ${host} in a moment.`)}`, "success");
   setTimeout(() => location.assign(url), delay);
 }
 
@@ -662,8 +669,10 @@ function showRefreshOffer(info) {
   $("refreshCapture").hidden = true;
   $("refreshActions").hidden = false;
   $("refreshText").textContent =
-    `Šablóna je stará ${info.days_since} dní. Raz za ${info.interval_days} dní ju obnovíme ${info.needed} novými vetami, ` +
-    "aby zodpovedala tomu, ako píšeš dnes. Systém zistí, či sa tvoje písanie zlepšilo alebo zhoršilo, a podľa toho upraví prah.";
+    t(`Šablóna je stará ${info.days_since} dní. Raz za ${info.interval_days} dní ju obnovíme ${info.needed} novými vetami, ` +
+      "aby zodpovedala tomu, ako píšeš dnes. Systém zistí, či sa tvoje písanie zlepšilo alebo zhoršilo, a podľa toho upraví prah.",
+      `The template is ${info.days_since} days old. Every ${info.interval_days} days we refresh it with ${info.needed} new sentences ` +
+      "so it matches how you type today. The system checks whether your typing got better or worse and adjusts the threshold.");
   showMessage("refreshMessage", "");
   refreshState = { count: info.pending || 0, needed: info.needed, challenge: null };
 }
@@ -692,17 +701,20 @@ async function sendRefresh(events) {
       await finishRefresh();
       return;
     }
-    refreshFlow.status(`Vzorka ${data.count} uložená. Pokračuj ďalšou vetou.`, "success");
+    refreshFlow.status(t(`Vzorka ${data.count} uložená. Pokračuj ďalšou vetou.`, `Sample ${data.count} saved. Continue with the next sentence.`), "success");
     await refreshFlow.next(true);
   } catch (error) {
-    refreshFlow.retry(`${error.message} Pripravujem novú vetu…`);
+    refreshFlow.retry(`${error.message} ${NEW_SENTENCE}`);
   }
 }
 
 const VERDICTS = {
-  improved: ["ok", "Zlepšenie", "Píšeš rýchlejšie alebo vyrovnanejšie ako minulý mesiac. Prah sa sprísnil, takže šablóna je presnejšia a systém bezpečnejší."],
-  stable: ["neutral", "Stabilné", "Tvoj štýl písania sa nezmenil. Šablóna sa len doplnila novými vzorkami."],
-  degraded: ["warn", "Zhoršenie", "Píšeš pomalšie alebo menej vyrovnane. Prah sa mierne uvoľnil, najviac o štvrtinu za jeden cyklus, aby ťa systém nezamietal."],
+  improved: ["ok", t("Zlepšenie", "Improved"), t("Píšeš rýchlejšie alebo vyrovnanejšie ako minulý mesiac. Prah sa sprísnil, takže šablóna je presnejšia a systém bezpečnejší.",
+    "You type faster or more evenly than last month. The threshold got stricter, so the template is more precise and the system safer.")],
+  stable: ["neutral", t("Stabilné", "Stable"), t("Tvoj štýl písania sa nezmenil. Šablóna sa len doplnila novými vzorkami.",
+    "Your typing style has not changed. The template was only topped up with new samples.")],
+  degraded: ["warn", t("Zhoršenie", "Declined"), t("Píšeš pomalšie alebo menej vyrovnane. Prah sa mierne uvoľnil, najviac o štvrtinu za jeden cyklus, aby ťa systém nezamietal.",
+    "You type slower or less evenly. The threshold was relaxed slightly, by a quarter per cycle at most, so the system does not reject you.")],
 };
 
 async function finishRefresh() {
@@ -715,17 +727,18 @@ async function finishRefresh() {
     const badge = $("reportBadge");
     badge.className = `badge ${kind}`;
     badge.textContent = title;
-    $("reportTitle").textContent = "Šablóna je obnovená";
+    $("reportTitle").textContent = t("Šablóna je obnovená", "The template is refreshed");
     let note = text;
-    if (r.needs_reenrollment) note += " Zmena je väčšia, než sa dá bezpečne vyrovnať úpravou prahu. Odporúča sa nová registrácia.";
-    else if (r.threshold_capped) note += " Prah dosiahol povolený strop.";
+    if (r.needs_reenrollment) note += t(" Zmena je väčšia, než sa dá bezpečne vyrovnať úpravou prahu. Odporúča sa nová registrácia.",
+      " The change is larger than a threshold adjustment can safely absorb. A new sign-up is recommended.");
+    else if (r.threshold_capped) note += t(" Prah dosiahol povolený strop.", " The threshold reached its allowed ceiling.");
     $("reportText").textContent = note;
     $("reportSpeed").textContent = pct(r.speed_change_pct);
     $("reportConsistency").textContent = pct(r.consistency_change_pct);
     $("reportThreshold").textContent = `${r.old_threshold.toFixed(3)} → ${r.new_threshold.toFixed(3)}`;
     $("refreshReport").hidden = false;
     showMessage("refreshMessage", "");
-    leaveAfterLogin("refreshMessage", "Šablóna je obnovená.", LEAVE_DELAY_MS * 3);
+    leaveAfterLogin("refreshMessage", t("Šablóna je obnovená.", "The template is refreshed."), LEAVE_DELAY_MS * 3);
   } catch (error) {
     refreshFlow.status(error.message, "error");
   }
@@ -737,7 +750,7 @@ function buildFlows() {
   const capture = (name) => new TypingCapture($(`${name}Typing`), { rhythm: $(`${name}Rhythm`), tempo: $(`${name}Tempo`) });
 
   enrollFlow = new Flow(capture("enroll"), "enrollHelp",
-    "Prepíš vetu malými písmenami bez diakritiky. Preklepy oprav Backspace-om.", fetchEnrollPhrase);
+    t("Prepíš vetu malými písmenami bez diakritiky. Preklepy oprav Backspace-om.", "Type the sentence in lowercase. Fix typos with Backspace."), fetchEnrollPhrase);
   enrollFlow.capture.onComplete = sendEnrollment;
   enrollFlow.onStop = (message) => {
     showEnrollCapture(false);
@@ -745,12 +758,12 @@ function buildFlows() {
   };
 
   verifyFlow = new Flow(capture("verify"), "verifyHelp",
-    "Prepíš vetu svojím bežným tempom. Po poslednom znaku sa pokus vyhodnotí sám.", fetchVerifyPhrase);
+    t("Prepíš vetu svojím bežným tempom. Po poslednom znaku sa pokus vyhodnotí sám.", "Type the sentence at your usual pace. The attempt is evaluated after the last character."), fetchVerifyPhrase);
   verifyFlow.capture.onComplete = submitVerification;
   verifyFlow.onStop = (message) => endVerification(message);
 
   refreshFlow = new Flow(capture("refresh"), "refreshHelp",
-    "Prepíš vetu. Vzorka, ktorá sa príliš líši od šablóny, sa nepočíta.", fetchRefreshPhrase);
+    t("Prepíš vetu. Vzorka, ktorá sa príliš líši od šablóny, sa nepočíta.", "Type the sentence. A sample that differs too much from the template does not count."), fetchRefreshPhrase);
   refreshFlow.capture.onComplete = sendRefresh;
   refreshFlow.onStop = (message) => {
     $("refreshCapture").hidden = true;
@@ -763,14 +776,14 @@ function setup() {
   drawDemo();
   fetch("/api/bootstrap").then((r) => r.json()).then((boot) => {
     BOOT = boot;
-    $("configPill").textContent = `metrika ${boot.metric}, k = ${boot.k}`;
+    $("configPill").textContent = `${t("metrika", "metric")} ${boot.metric}, k = ${boot.k}`;
     $("testModeRow").hidden = !boot.test_mode_allowed;
     buildFlows();
     setupTurnstile();
     $("enrollCounter").textContent = `0 / ${boot.min_enrollment}`;
     $("enrollTarget").innerHTML = [boot.min_enrollment, Math.round((boot.min_enrollment + boot.max_enrollment) / 2), boot.max_enrollment]
       .map((n, i) => `<option value="${n}" ${i === 1 ? "selected" : ""}>${n}</option>`).join("");
-  }).catch((error) => showMessage("enrollMessage", `Bootstrap zlyhal: ${error.message}`, "error"));
+  }).catch((error) => showMessage("enrollMessage", `${t("Načítanie konfigurácie zlyhalo", "Loading the configuration failed")}: ${error.message}`, "error"));
 
   document.querySelectorAll(".tab").forEach((button) => button.addEventListener("click", () => setTab(button.dataset.tab)));
 
@@ -786,7 +799,7 @@ function setup() {
     const on = event.target.checked;
     $("actorField").hidden = !on;
     $("typeField").hidden = !on;
-    $("verifyUsernameLabel").textContent = on ? "Cieľový účet / koho napodobňuješ" : "Používateľské meno";
+    $("verifyUsernameLabel").textContent = on ? t("Cieľový účet / koho napodobňuješ", "Target account / who you imitate") : t("Používateľské meno", "Username");
     if (on) $("verifyConsent").checked = true;
   });
   $("verifyForm").addEventListener("submit", (event) => {
@@ -803,7 +816,7 @@ function setup() {
   });
   $("refreshLater").addEventListener("click", () => {
     $("refreshCard").hidden = true;
-    leaveAfterLogin("verifyMessage", "Oba faktory prešli.", 800);
+    leaveAfterLogin("verifyMessage", BOTH_PASSED, 800);
   });
 }
 

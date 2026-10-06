@@ -1,14 +1,29 @@
 import io
 import json
 
+import pytest
+
 from backend import sentences
-from backend.sentences import is_valid, sanitize, template_sentence
+from backend.corpus import CORPUS
+from backend.sentences import LANGUAGES, is_valid, next_phrase, sanitize
 
 
-def test_template_sentences_are_valid_and_varied():
-    batch = {template_sentence() for _ in range(60)}
-    assert all(is_valid(s) for s in batch)
-    assert len(batch) > 30
+@pytest.mark.parametrize("lang", LANGUAGES)
+def test_corpus_sentences_are_valid_and_unique(lang):
+    assert len(CORPUS[lang]) >= 100
+    assert [s for s in CORPUS[lang] if not is_valid(s)] == []
+    assert len(set(CORPUS[lang])) == len(CORPUS[lang])
+
+
+@pytest.mark.parametrize("lang", LANGUAGES)
+def test_phrases_come_from_the_requested_language_without_quick_repeats(lang):
+    batch = [next_phrase(lang) for _ in range(40)]
+    assert all(source == "corpus" and phrase in CORPUS[lang] for phrase, source in batch)
+    assert len({phrase for phrase, _ in batch}) == 40
+
+
+def test_unknown_language_falls_back_to_slovak():
+    assert next_phrase("de")[0] in CORPUS["sk"]
 
 
 def test_sanitize_strips_diacritics_and_punctuation():
@@ -16,16 +31,23 @@ def test_sanitize_strips_diacritics_and_punctuation():
 
 
 def test_llm_output_is_filtered(monkeypatch):
-    reply = {"choices": [{"message": {"content": "1. Dnes večer čítam novú knihu v knižnici.\nkrátka\n" + "x" * 90}}]}
+    content = chr(10).join(["1. Dnes večer čítam novú knihu v knižnici.", "krátka", "x" * 90])
+    reply = {"choices": [{"message": {"content": content}}]}
+    sent = []
 
     class FakeResponse(io.BytesIO):
         def __enter__(self): return self
         def __exit__(self, *a): return False
 
-    monkeypatch.setattr(sentences.urllib.request, "urlopen", lambda *a, **k: FakeResponse(json.dumps(reply).encode()))
+    def fake_urlopen(request, **kwargs):
+        sent.append(json.loads(request.data)["messages"][0]["content"])
+        return FakeResponse(json.dumps(reply).encode())
+
+    monkeypatch.setattr(sentences.urllib.request, "urlopen", fake_urlopen)
     from types import SimpleNamespace
-    fake = SimpleNamespace(**{**vars(sentences.settings.__class__), **{k: getattr(sentences.settings, k) for k in dir(sentences.settings) if k.isupper()}})
+    fake = SimpleNamespace(**{k: getattr(sentences.settings, k) for k in dir(sentences.settings) if k.isupper()})
     fake.LLM_URL = "http://fake"
     monkeypatch.setattr(sentences, "settings", fake)
-    result = sentences._call_llm(3)
+    result = sentences._call_llm(3, "en")
     assert result and all(is_valid(s) for s in result)
+    assert "english" in sent[0] and "Examples:" in sent[0]      # prompt je v jazyku, ktorý sa pýta

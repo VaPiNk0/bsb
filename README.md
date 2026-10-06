@@ -15,7 +15,7 @@ Semestrálny projekt: behaviorálna biometrická autentifikácia podľa dynamiky
 
 ## Prečo práve tieto nastavenia
 
-**Vety:** každý challenge dostane novú vetu (35–55 znakov, malé písmená a-z a medzera). Vety generuje `backend/sentences.py`: ak je nastavený `LLM_URL`, použije sa lokálny LLM cez OpenAI-kompatibilné API (Ollama, LM Studio, llama.cpp, vLLM) a viety sa predgenerujú do zásobníka na pozadí; inak (alebo keď LLM neodpovie) sa použije offline šablónový generátor. Vetu si drží server, takže ju klient nemôže zmeniť. Keďže znaky sa porovnávajú podľa `event.key`, funguje to rovnako na QWERTY aj QWERTZ.
+**Vety:** každý challenge dostane novú vetu (35–55 znakov, malé písmená a-z a medzera). Vety generuje `backend/sentences.py`: ak je nastavený `LLM_URL`, použije sa lokálny LLM cez OpenAI-kompatibilné API (Ollama, LM Studio, llama.cpp, vLLM) a viety sa predgenerujú do zásobníka na pozadí; inak (alebo keď LLM neodpovie) sa vyberie veta zo zbierky bežných viet v `backend/corpus.py` (slovenské bez diakritiky a anglické; nedávno použité sa neopakujú). Jazyk viet sa viaže na účet podľa jazyka rozhrania pri registrácii: v inom jazyku píše človek inak, takže prihlásenie aj obnova dostanú vety v jazyku, v ktorom vznikla šablóna. Vetu si drží server, takže ju klient nemôže zmeniť. Keďže znaky sa porovnávajú podľa `event.key`, funguje to rovnako na QWERTY aj QWERTZ.
 
 **Príznaky:** vektor nie je viazaný na pozíciu znaku, ale na klávesu a dvojicu znakov: 27 dwell (a–z a medzera) + 44 DD pre frekventované bigramy + 16 globálnych (medián dwell/DD/UD, 90. percentil DD, % rollover a kvartily a chvosty rozloženia dwell/DD/UD: p10, p25, p75, p90) = **87 rozmerov**. Globálne príznaky sa počítajú zo všetkých stlačení vo vete, preto sú najmenej zašumené; 11 príznakov rozloženia pribudlo vo verzii šablóny 4 a na benchmarku nižšie samy znížili EER asi o 1 percentuálny bod. Vzorky uložené staršou verziou majú 76 hodnôt a chýbajúci koniec sa berie ako nepozorovaný, takže fungujú ďalej; nové príznaky sa do šablóny dostanú novou registráciou alebo mesačnou obnovou. Čo veta neobsahuje, je `null` a pri skórovaní sa preskočí (skóre sa počíta len cez príznaky, ktoré šablóna pozná aspoň z 2 vzoriek a ktoré sa v pokuse vyskytli; minimum 15).
 
@@ -187,7 +187,7 @@ pytest -q
 
 ## Generátor viet a lokálny LLM
 
-Bez konfigurácie beží offline šablónový generátor (stovky kombinácií, nie je to neurónová sieť). Na generovanie lokálnym modelom:
+Bez konfigurácie sa vety berú zo zbierky v `backend/corpus.py` (žiadny model nebeží; tak je to aj v nasadení na Renderi, kde `LLM_URL` nastavené nie je). Na generovanie lokálnym modelom:
 
 ```powershell
 # príklad: Ollama
@@ -197,7 +197,9 @@ $env:LLM_MODEL="qwen2.5:7b"
 python run.py
 ```
 
-Voliteľne `LLM_API_KEY`, `LLM_TIMEOUT` (s). Server si každú dávku vygenerovaných viet prefiltruje (odstráni diakritiku a interpunkciu, skontroluje dĺžku 35–55 znakov) a vety, ktoré neprejdú, zahodí. Ak LLM neodpovedá, prihlásenie ďalej funguje s offline generátorom. V audit logu a DB (`phrase`) je uložená veta každého pokusu.
+Voliteľne `LLM_API_KEY`, `LLM_TIMEOUT` (s). Server si každú dávku vygenerovaných viet prefiltruje (odstráni diakritiku a interpunkciu, skontroluje dĺžku 35–55 znakov) a vety, ktoré neprejdú, zahodí. Prompt je v jazyku účtu a obsahuje päť príkladov zo zbierky, podľa ktorých model trafí dĺžku aj tón. Ak LLM neodpovedá, prihlásenie ďalej funguje so zbierkou.
+
+**Jazyk rozhrania.** Stránka aj admin panel sa dajú prepnúť do angličtiny tlačidlom v hlavičke (voľba sa pamätá v prehliadači, východisková je slovenčina). Slovenský text je v HTML, anglický v atribútoch `data-en`; v skriptoch `t("sk", "en")`. Hlášky API prekladá `backend/i18n.py` podľa hlavičky `X-Lang`. V audit logu a DB (`phrase`) je uložená veta každého pokusu.
 
 **Poznámka k starej databáze:** starší `data/keystroke.db` s pevným 136-prvkovým vektorom je nekompatibilný. Zmaž ho pred prvým spustením.
 

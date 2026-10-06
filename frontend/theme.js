@@ -29,9 +29,9 @@
     const button = document.getElementById("themeToggle");
     if (!button) return;
     const label = () => {
-      const next = root.dataset.theme === "dark" ? "svetlú" : "tmavú";
-      button.setAttribute("aria-label", `Prepnúť na ${next} tému`);
-      button.title = `Prepnúť na ${next} tému`;
+      const dark = root.dataset.theme === "dark";
+      button.title = dark ? t("Prepnúť na svetlú tému", "Switch to light theme") : t("Prepnúť na tmavú tému", "Switch to dark theme");
+      button.setAttribute("aria-label", button.title);
     };
     label();
     document.addEventListener("themechange", label);

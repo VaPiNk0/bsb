@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import hmac
 import io
 import json
 import math
@@ -48,7 +50,8 @@ from .drift import analyze_drift, decide_threshold
 from .features import FEATURE_COUNT, extract_features
 from .report import ATTEMPT_COLUMNS, SCENARIO_COLUMNS, USER_COLUMNS, build_report
 from .scoring import TEMPLATE_VERSION, build_template, score_vector
-from .sentences import next_phrase
+from .i18n import to_english
+from .sentences import DEFAULT_LANGUAGE, LANGUAGES, next_phrase
 
 
 FRONTEND = Path(__file__).resolve().parents[1] / "frontend"
@@ -107,6 +110,27 @@ def require_human(body: dict) -> None:
     if not token or len(token) > 4096 or not turnstile_ok(token):
         raise HumanCheckFailed("Overenie, že nie si robot, zlyhalo. Skús to znova.")
     session["human_until"] = time.time() + settings.HUMAN_CHECK_TTL_SECONDS
+
+
+def request_lang() -> str:
+    """Jazyk rozhrania, ktorý si klient vypýtal hlavičkou X-Lang."""
+    lang = request.headers.get("X-Lang", "")
+    return lang if lang in LANGUAGES else DEFAULT_LANGUAGE
+
+
+def phrase_lang(user) -> str:
+    """Jazyk viet je viazaný na účet: šablóna vznikla z viet v jednom jazyku a v inom jazyku
+    píše človek inak, takže prihlásenie aj obnova dostanú vety v jazyku registrácie."""
+    return user["phrase_lang"] or DEFAULT_LANGUAGE
+
+
+def decoy_lang(username: str) -> str:
+    """Jazyk falošnej vety pre neexistujúci účet. Nesmie závisieť od hlavičky X-Lang: skutočný
+    účet má jazyk pevný, takže podľa toho, či veta "poslúcha" hlavičku, by sa dalo zistiť, či
+    účet existuje. Odvodí sa preto z mena (stále rovnako pre to isté meno); väčšina vychádza
+    v predvolenom jazyku, tak ako skutočné účty."""
+    digest = hmac.new(app.secret_key.encode(), username.lower().encode(), hashlib.sha256).digest()
+    return DEFAULT_LANGUAGE if digest[0] % 4 else next(lang for lang in LANGUAGES if lang != DEFAULT_LANGUAGE)
 
 
 def csrf_token() -> str:
@@ -220,10 +244,10 @@ def verify_rate_limit(username: str) -> None:
         raise PermissionError("Príliš veľa pokusov, chvíľu počkaj.")
 
 
-def make_challenge(user_id: int, purpose: str) -> tuple[str, int, str]:
+def make_challenge(user_id: int, purpose: str, lang: str) -> tuple[str, int, str]:
     """Každý challenge nesie vlastnú vetu; server si ju pamätá, klient ju nevie zmeniť."""
     token = secrets.token_urlsafe(32)
-    phrase, _source = next_phrase()
+    phrase, _source = next_phrase(lang)
     challenge_id = create_challenge(user_id, purpose, token, settings.CHALLENGE_TTL_SECONDS, phrase)
     return token, challenge_id, phrase
 
@@ -287,6 +311,16 @@ def only_through_proxy():
 @app.errorhandler(HumanCheckFailed)
 def human_check_failed(exc):
     return jsonify(error=str(exc), captcha=True), 403
+
+
+@app.after_request
+def translate_error(response):
+    if request_lang() == "en" and response.is_json:
+        data = response.get_json(silent=True)
+        if isinstance(data, dict) and isinstance(data.get("error"), str):
+            data["error"] = to_english(data["error"])
+            response.set_data(json.dumps(data))
+    return response
 
 
 @app.after_request
@@ -362,10 +396,12 @@ def enrollment_begin():
             # nepočítajú znova (inak ~0,3 s navyše pred každou vetou).
             if session.get("enroll_user_id") != user_id and not check_password_hash(user["password_hash"], password):
                 return jsonify(error="Používateľ existuje, ale heslo nesedí."), 409
+            lang = phrase_lang(user)
         else:
-            user_id = create_user(username, generate_password_hash(password))
+            lang = request_lang()
+            user_id = create_user(username, generate_password_hash(password), lang)
         session["enroll_user_id"] = user_id
-        token, challenge_id, phrase = make_challenge(user_id, "enrollment")
+        token, challenge_id, phrase = make_challenge(user_id, "enrollment", lang)
         count = len(get_enrollment_samples(user_id))
         return jsonify(
             user_id=user_id,
@@ -439,8 +475,8 @@ def verification_begin():
         if not user or not user["template_json"]:
             # Rovnaká odpoveď pre neexistujúci účet aj účet bez šablóny: žiadna enumerácia.
             # Falošný challenge sa pri overení správa ako expirovaný.
-            return jsonify(challenge=secrets.token_urlsafe(32), challenge_id=0, phrase=next_phrase()[0])
-        token, challenge_id, phrase = make_challenge(int(user["id"]), "verification")
+            return jsonify(challenge=secrets.token_urlsafe(32), challenge_id=0, phrase=next_phrase(decoy_lang(username))[0])
+        token, challenge_id, phrase = make_challenge(int(user["id"]), "verification", phrase_lang(user))
         return jsonify(challenge=token, challenge_id=challenge_id, phrase=phrase)
     except PermissionError as exc:
         return jsonify(error=str(exc)), 429
@@ -638,7 +674,7 @@ def refresh_begin():
         require_csrf()
         user = session_user()
         info = refresh_info(user)
-        token, challenge_id, phrase = make_challenge(int(user["id"]), "refresh")
+        token, challenge_id, phrase = make_challenge(int(user["id"]), "refresh", phrase_lang(user))
         return jsonify(challenge=token, challenge_id=challenge_id, phrase=phrase,
                        count=info["pending"], needed=info["needed"], due=info["due"])
     except PermissionError as exc:

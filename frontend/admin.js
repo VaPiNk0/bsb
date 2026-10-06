@@ -1,5 +1,5 @@
 async function loadAdmin() {
-  const response = await fetch("/api/admin/overview");
+  const response = await fetch("/api/admin/overview", { headers: { "X-Lang": LANG } });
   const data = await response.json();
   if (!response.ok) {
     location.href = "/";
@@ -8,29 +8,29 @@ async function loadAdmin() {
   document.getElementById("currentUser").textContent = data.current_user;
 
   const stats = [
-    ["Metrika", data.metric],
+    [t("Metrika", "Metric"), data.metric],
     ["k", data.k],
-    ["Lockout", `${data.lockout_threshold} zlyhaní / ${data.lockout_seconds}s`],
-    ["Rate limit", data.rate_limit],
+    [t("Zámok účtu", "Lockout"), t(`${data.lockout_threshold} zlyhaní / ${data.lockout_seconds} s`, `${data.lockout_threshold} failures / ${data.lockout_seconds} s`)],
+    [t("Limit pokusov", "Rate limit"), data.rate_limit],
   ];
   document.getElementById("statsGrid").innerHTML = stats.map(([label, value]) => `<div class="stat"><span>${escapeHtml(String(label))}</span><strong>${escapeHtml(String(value))}</strong></div>`).join("");
 
   document.getElementById("usersTable").innerHTML = data.users.map((u) => {
     const r = u.refresh;
     const refreshBadge = !u.enrolled ? '<span class="badge neutral">—</span>'
-      : r.due ? `<span class="badge bad">po termíne (${r.days_since} dní)</span>`
-      : `<span class="badge ok">o ${r.due_in_days} dní</span>`;
+      : r.due ? `<span class="badge bad">${t(`po termíne (${r.days_since} dní)`, `overdue (${r.days_since} days)`)}</span>`
+      : `<span class="badge ok">${t(`o ${r.due_in_days} dní`, `in ${r.due_in_days} days`)}</span>`;
     const age = data.test_mode_allowed && u.enrolled
-      ? `<button class="secondary age-btn" data-user="${u.id}" data-days="${data.refresh_days}">Posunúť o mesiac</button>` : "";
+      ? `<button class="secondary age-btn" data-user="${u.id}" data-days="${data.refresh_days}">${t("Posunúť o mesiac", "Age by a month")}</button>` : "";
     return `
     <tr>
       <td>${escapeHtml(u.username)}</td>
       <td class="num">${u.enrollment_count}</td>
-      <td><span class="badge ${u.enrolled ? "ok" : "warn"}">${u.enrolled ? "áno" : "nie"}</span></td>
+      <td><span class="badge ${u.enrolled ? "ok" : "warn"}">${u.enrolled ? t("áno", "yes") : t("nie", "no")}</span></td>
       <td class="num">${u.template_cycle || 0}</td>
       <td>${refreshBadge}</td>
       <td class="num">${u.failed_count}</td>
-      <td>${u.lock_until ? escapeHtml(new Date(u.lock_until).toLocaleString("sk-SK")) : "—"}</td>
+      <td>${u.lock_until ? escapeHtml(new Date(u.lock_until).toLocaleString(LOCALE)) : "—"}</td>
       <td>${age}</td>
     </tr>`;
   }).join("");
@@ -49,21 +49,21 @@ async function loadAdmin() {
   renderChart(data.attempts);
   document.getElementById("attemptsTable").innerHTML = data.attempts.map((a) => `
     <tr>
-      <td>${escapeHtml(new Date(a.created_at).toLocaleString("sk-SK"))}</td>
+      <td>${escapeHtml(new Date(a.created_at).toLocaleString(LOCALE))}</td>
       <td>${escapeHtml(a.username)}</td>
       <td>${escapeHtml(a.actor_label || "—")}</td>
       <td><span class="badge ${a.attempt_type === "genuine" ? "ok" : a.attempt_type === "imitacia" ? "warn" : "bad"}">${escapeHtml(a.attempt_type)}</span></td>
       <td class="num">${a.score === null ? "—" : Number(a.score).toFixed(4)}</td>
       <td class="num">${a.threshold === null ? "—" : Number(a.threshold).toFixed(4)}</td>
-      <td><span class="badge ${a.accepted ? "ok" : "bad"}">${a.accepted ? "ACCEPT" : "REJECT"}</span></td>
-      <td>${escapeHtml(a.replay_detected ? "replay" : (a.reason || "—"))}</td>
+      <td><span class="badge ${a.accepted ? "ok" : "bad"}">${a.accepted ? t("prijatý", "accepted") : t("zamietnutý", "rejected")}</span></td>
+      <td>${escapeHtml(a.replay_detected ? "replay" : (EXCLUDED[a.reason] || a.reason || "—"))}</td>
     </tr>`).join("");
 }
 
 const TREND = {
-  improved: ["ok", "zlepšenie"],
-  stable: ["neutral", "stabilné"],
-  degraded: ["warn", "zhoršenie"],
+  improved: ["ok", t("zlepšenie", "improved")],
+  stable: ["neutral", t("stabilné", "stable")],
+  degraded: ["warn", t("zhoršenie", "declined")],
 };
 const SERIES = 6;   // počet farieb radov v style.css (.s0 – .s5)
 
@@ -76,16 +76,16 @@ function renderHistory(history) {
   const chart = document.getElementById("trendChart");
   const legend = document.getElementById("trendLegend");
   if (!history.length) {
-    body.innerHTML = '<tr><td colspan="8">Zatiaľ žiadna obnova. Používateľ ju dostane pri prihlásení, keď šablóna zostarne o 30 dní.</td></tr>';
+    body.innerHTML = `<tr><td colspan="8">${t("Zatiaľ žiadna obnova. Používateľ ju dostane pri prihlásení, keď šablóna zostarne o 30 dní.", "No refresh yet. A user is offered one at login once the template is 30 days old.")}</td></tr>`;
     chart.innerHTML = "";
     legend.innerHTML = "";
     return;
   }
   body.innerHTML = [...history].reverse().map((h) => {
     const [kind, label] = TREND[h.verdict] || TREND.stable;
-    const note = h.threshold_capped ? "prah na strope, zváž novú registráciu" : "—";
+    const note = h.threshold_capped ? t("prah na strope, zváž novú registráciu", "threshold at its ceiling, consider a new sign-up") : "—";
     return `<tr>
-      <td>${escapeHtml(new Date(h.created_at).toLocaleString("sk-SK"))}</td>
+      <td>${escapeHtml(new Date(h.created_at).toLocaleString(LOCALE))}</td>
       <td>${escapeHtml(h.username)}</td>
       <td class="num">${h.cycle}</td>
       <td><span class="badge ${kind}">${label}</span></td>
@@ -111,12 +111,12 @@ function renderHistory(history) {
   const yMin = Math.floor((lo - pad) / 10) * 10, yMax = Math.ceil((hi + pad) / 10) * 10;
   const x = (c) => L + (c / maxCycle) * (W - L - R);
   const y = (v) => T + (1 - (v - yMin) / (yMax - yMin)) * (H - T - B);
-  let svg = `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Vývoj tempa písania podľa mesiacov">`;
+  let svg = `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${t("Vývoj tempa písania podľa mesiacov", "Typing speed by month")}">`;
   for (let i = 0; i <= 4; i++) {
     const v = yMin + ((yMax - yMin) * i) / 4;
     svg += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" class="grid"/><text x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${Math.round(v)} ms</text>`;
   }
-  for (let c = 0; c <= maxCycle; c++) svg += `<text x="${x(c)}" y="${H - 8}" text-anchor="${c === 0 ? "start" : c === maxCycle ? "end" : "middle"}">${c === 0 ? "začiatok" : `mesiac ${c}`}</text>`;
+  for (let c = 0; c <= maxCycle; c++) svg += `<text x="${x(c)}" y="${H - 8}" text-anchor="${c === 0 ? "start" : c === maxCycle ? "end" : "middle"}">${c === 0 ? t("začiatok", "start") : t(`mesiac ${c}`, `month ${c}`)}</text>`;
   Object.entries(byUser).forEach(([name, pts], i) => {
     const series = `series s${i % SERIES}`;
     svg += `<polyline class="${series}" points="${pts.map((p) => `${x(p.cycle)},${y(p.v)}`).join(" ")}"/>`;
@@ -133,27 +133,28 @@ function renderHistory(history) {
   });
   const note = document.createElement("span");
   note.className = "muted";
-  note.textContent = "nižšie = rýchlejšie písanie";
+  note.textContent = t("nižšie = rýchlejšie písanie", "lower = faster typing");
   legend.appendChild(note);
 }
 
 const SCENARIOS = {
-  genuine: "genuine (vlastník účtu)",
-  impostor: "impostor (vlastný štýl)",
-  imitacia: "imitácia",
-  attacks_total: "útoky spolu",
+  genuine: t("genuine (vlastník účtu)", "genuine (account owner)"),
+  impostor: t("impostor (vlastný štýl)", "impostor (own style)"),
+  imitacia: t("imitácia", "imitation"),
+  attacks_total: t("útoky spolu", "all attacks"),
 };
 const EXCLUDED = {
-  password_failed: "nesprávne heslo",
-  account_locked: "zamknutý účet",
+  password_failed: t("nesprávne heslo", "wrong password"),
+  account_locked: t("zamknutý účet", "account locked"),
   replay: "replay",
-  insufficient_features: "málo použiteľných kláves",
-  unknown_user: "neznámy účet",
+  duplicate_feature_vector: "replay",
+  insufficient_features: t("málo použiteľných kláves", "too few usable keys"),
+  unknown_user: t("neznámy účet", "unknown account"),
 };
 
 function numText(v, digits) {
   return v === null || v === undefined ? "—"
-    : Number(v).toLocaleString("sk-SK", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+    : Number(v).toLocaleString(LOCALE, { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 
 function rateText(v) {
@@ -171,7 +172,7 @@ function renderReport(report) {
     ["FRR", rateWithCounts(genuine.rate, genuine.errors, genuine.n)],
     ["FAR", rateWithCounts(attacks.rate, attacks.errors, attacks.n)],
     ["EER", rateText(report.eer)],
-    ["Vyhodnotené pokusy", String(report.scored)],
+    [t("Vyhodnotené pokusy", "Scored attempts"), String(report.scored)],
   ];
   document.getElementById("reportStats").innerHTML = stats.map(([label, value]) => `<div class="stat"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
 
@@ -188,14 +189,18 @@ function renderReport(report) {
     </tr>`).join("");
 
   const notes = [];
-  if (genuine.n) notes.push(`Z ${genuine.n} genuine pokusov je ${report.genuine_labeled} označených v testovacom režime; pri ostatných sa predpokladá, že písal vlastník účtu.`);
-  if (!attacks.n) notes.push("FAR a EER sa nedajú určiť, kým nie sú pokusy typu impostor alebo imitácia (zbierajú sa v testovacom režime).");
+  if (genuine.n) notes.push(t(`Z ${genuine.n} genuine pokusov je ${report.genuine_labeled} označených v testovacom režime; pri ostatných sa predpokladá, že písal vlastník účtu.`,
+    `Of ${genuine.n} genuine attempts, ${report.genuine_labeled} are labelled in test mode; for the rest the account owner is assumed to be typing.`));
+  if (!attacks.n) notes.push(t("FAR a EER sa nedajú určiť, kým nie sú pokusy typu impostor alebo imitácia (zbierajú sa v testovacom režime).",
+    "FAR and EER cannot be determined until there are impostor or imitation attempts (collected in test mode)."));
   if (report.excluded_total) {
     const reasons = report.excluded.map((e) => `${EXCLUDED[e.reason] || e.reason} ${e.n}`).join(", ");
-    notes.push(`Mimo vyhodnotenia je ${report.excluded_total} pokusov bez biometrického skóre: ${reasons}.`);
+    notes.push(t(`Mimo vyhodnotenia je ${report.excluded_total} pokusov bez biometrického skóre: ${reasons}.`,
+      `${report.excluded_total} attempts without a biometric score are excluded: ${reasons}.`));
   }
-  notes.push(`Pokusy sú z ${report.accounts} účtov od ${report.testers} testerov.`);
-  notes.push("Interval je 95 % Wilsonov; EER je bod, kde sa FAR a FRR vyrovnajú pri spoločnom násobku prahov.");
+  notes.push(t(`Pokusy sú z ${report.accounts} účtov od ${report.testers} testerov.`, `The attempts cover ${report.accounts} accounts and ${report.testers} testers.`));
+  notes.push(t("Interval je 95 % Wilsonov; EER je bod, kde sa FAR a FRR vyrovnajú pri spoločnom násobku prahov.",
+    "The interval is a 95% Wilson interval; EER is the point where FAR and FRR meet under a common multiple of the thresholds."));
   document.getElementById("reportNote").textContent = notes.join(" ");
 
   document.getElementById("userResultsTable").innerHTML = report.users.map((u) => `
@@ -216,7 +221,7 @@ function renderChart(attempts) {
   const rows = attempts.filter((a) => a.score !== null && a.threshold).reverse();
   const box = document.getElementById("scoreChart");
   if (!rows.length) {
-    box.innerHTML = '<p>Zatiaľ žiadne vyhodnotené pokusy. Prihlás sa v testovacom režime a objavia sa tu.</p>';
+    box.innerHTML = `<p>${t("Zatiaľ žiadne vyhodnotené pokusy. Po prvom prihlásení sa objavia tu.", "No evaluated attempts yet. They appear here after the first login.")}</p>`;
     return;
   }
   const W = 1100, H = 280, L = 44, R = 16, T = 14, B = 28;
@@ -225,16 +230,16 @@ function renderChart(attempts) {
   const x = (i) => L + (rows.length === 1 ? (W - L - R) / 2 : (i / (rows.length - 1)) * (W - L - R));
   const y = (v) => T + (1 - v / max) * (H - T - B);
   const known = ["genuine", "impostor", "imitacia"];
-  let svg = `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Skóre pokusov vydelené prahom">`;
+  let svg = `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${t("Skóre pokusov vydelené prahom", "Attempt scores divided by the threshold")}">`;
   svg += `<rect x="${L}" y="${y(1)}" width="${W - L - R}" height="${H - B - y(1)}" class="zone-ok"/>`;
   for (let v = 0; v <= max; v += 0.5) {
     svg += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" class="${v === 1 ? "grid-strong" : "grid"}"/>`;
     svg += `<text x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${v.toFixed(1)}</text>`;
   }
   rows.forEach((a, i) => {
-    svg += `<circle cx="${x(i)}" cy="${y(ratios[i])}" r="6" class="dot series t-${known.includes(a.attempt_type) ? a.attempt_type : "other"}"><title>${escapeHtml(a.actor_label || a.username)} → ${escapeHtml(a.username)}: ${ratios[i].toFixed(2)}× prah</title></circle>`;
+    svg += `<circle cx="${x(i)}" cy="${y(ratios[i])}" r="6" class="dot series t-${known.includes(a.attempt_type) ? a.attempt_type : "other"}"><title>${escapeHtml(a.actor_label || a.username)} → ${escapeHtml(a.username)}: ${ratios[i].toFixed(2)}× ${t("prah", "threshold")}</title></circle>`;
   });
-  svg += `<text x="${W - R}" y="${y(1) - 6}" text-anchor="end">prah = 1,0</text></svg>`;
+  svg += `<text x="${W - R}" y="${y(1) - 6}" text-anchor="end">${t("prah = 1,0", "threshold = 1.0")}</text></svg>`;
   box.innerHTML = svg;
 }
 

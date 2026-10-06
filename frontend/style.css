@@ -95,6 +95,7 @@ p { margin: 8px 0 0; max-width: 64ch; color: var(--ink-soft); }
   border: 1px solid var(--rule-strong); border-radius: 4px; background: transparent; color: var(--ink-soft);
 }
 .icon-button:hover { color: var(--ink); border-color: var(--ink); }
+.lang-button { font-size: 13px; font-weight: 600; }
 .icon-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 /* ikona ukazuje, na čo sa prepne */
 :root[data-theme="light"] .icon-sun, :root:not([data-theme="light"]) .icon-moon { display: none; }
@@ -273,7 +274,7 @@ a.secondary, .age-btn, .topbar .secondary { padding: 7px 14px; font-size: 14px; 
 .accepted .gauge-fill { background: var(--green); }
 .rejected .gauge-fill { background: var(--red); }
 .gauge-mark { position: absolute; top: -7px; bottom: -7px; left: 50%; width: 2px; background: var(--ink); }
-.gauge-mark::after { content: "prah"; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); font-size: 13px; color: var(--ink-soft); margin-top: 3px; }
+.gauge-mark::after { content: attr(data-label); position: absolute; top: 100%; left: 50%; transform: translateX(-50%); font-size: 13px; color: var(--ink-soft); margin-top: 3px; }
 
 .result-metrics, .stats-grid { display: grid; gap: 0; border-top: 1px solid var(--rule-strong); border-bottom: 1px solid var(--rule-strong); }
 .result-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 20px; }

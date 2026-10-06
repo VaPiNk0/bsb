@@ -146,7 +146,7 @@ def test_text_must_match_the_servers_sentence(client):
 def test_replay_of_identical_vector_rejected(client):
     enroll(client)
     b = client.post("/api/verification/begin", json={"username": "P01"}, headers=c_h(client)).get_json()
-    ev = make_events(b["phrase"], random.Random(11))
+    ev = make_events(b["phrase"], random.Random(11), jitter=5.0)
     body = {"username": "P01", "password": "dlhe-heslo-123", "challenge": b["challenge"], "events": ev}
     assert client.post("/api/verification", json=body, headers=c_h(client)).status_code == 200
     b2 = client.post("/api/verification/begin", json={"username": "P01"}, headers=c_h(client)).get_json()
@@ -367,3 +367,32 @@ def test_admin_report_matches_recorded_decisions(client):
         lines = r.get_data(as_text=True).lstrip("﻿").splitlines()
         assert lines[0].split(",")[0] == first_column and len(lines) > 1
     assert client.get("/api/admin/report/nieco.csv").status_code == 404
+
+
+# ---------- jazyk viet a hlášok ----------
+
+def test_sentence_language_is_bound_to_the_account(client):
+    from backend.corpus import CORPUS
+    english = {**c_h(client), "X-Lang": "en"}
+    body = {"username": "P05", "password": "dlhe-heslo-123", "password_confirm": "dlhe-heslo-123"}
+    assert client.post("/api/enrollment/begin", json=body, headers=english).get_json()["phrase"] in CORPUS["en"]
+    # účet vznikol s anglickými vetami; prepnutie rozhrania na slovenčinu ich nezmení
+    assert client.post("/api/enrollment/begin", json=body, headers=c_h(client)).get_json()["phrase"] in CORPUS["en"]
+
+    enroll(client)                                           # P01 bez hlavičky => slovenské vety
+    r = client.post("/api/verification/begin", json={"username": "P01"}, headers=english)
+    assert r.get_json()["phrase"] in CORPUS["sk"]
+
+    # neexistujúci účet sa musí správať rovnako: jazyk vety nezávisí od hlavičky, inak by prezradil, že účet nie je
+    def decoy_language(headers):
+        phrase = client.post("/api/verification/begin", json={"username": "nikto"}, headers=headers).get_json()["phrase"]
+        return "en" if phrase in CORPUS["en"] else "sk"
+    assert decoy_language(english) == decoy_language(c_h(client)) == decoy_language(english)
+
+
+def test_errors_are_translated_on_request(client):
+    body = {"username": "P06", "password": "kratke", "password_confirm": "kratke"}
+    slovak = client.post("/api/enrollment/begin", json=body, headers=c_h(client)).get_json()["error"]
+    english = client.post("/api/enrollment/begin", json=body, headers={**c_h(client), "X-Lang": "en"}).get_json()["error"]
+    assert slovak == "Heslo musí mať aspoň 10 znakov"
+    assert english == "The password must be at least 10 characters"
