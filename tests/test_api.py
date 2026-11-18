@@ -194,35 +194,25 @@ def test_postgres_pool_checks_connections_before_use(client, monkeypatch):
     assert FakePool.made[0].options["kwargs"]["prepare_threshold"] is None
 
 
-def test_page_warns_touch_devices_only_on_demand(client):
-    """Upozornenie na fyzickú klávesnicu je v stránke skryté; zobrazí ho až skript na dotykovom zariadení."""
+def test_page_has_touch_notice_and_no_phone_block(client):
+    """Upozornenie pre dotykové zariadenia je v stránke skryté; zobrazí ho až skript. Telefón sa už neodmieta."""
     html = client.get("/").get_data(as_text=True)
     assert '<section class="notice" id="touchNotice" hidden>' in html
-    # zamietacia obrazovka pre telefón je tiež skrytá a vedie preč z aplikácie
-    block = html.split('id="phoneBlock" hidden>')[1].split("</section>")[0]
-    assert 'href="https://www.google.com/"' in block
+    assert 'id="phoneBlock"' not in html
 
 
-@pytest.mark.parametrize("agent, allowed", [
-    ("Mozilla/5.0 (Linux; Android 16; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36", False),
-    ("Mozilla/5.0 (iPhone; CPU iPhone OS 19_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/19.0 Mobile/15E148 Safari/604.1", False),
-    ("Mozilla/5.0 (Android 16; Mobile; rv:144.0) Gecko/144.0 Firefox/144.0", False),
-    ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36", True),
-    ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/19.0 Safari/605.1.15", True),
-    ("Mozilla/5.0 (Linux; Android 16; SM-X910) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36", True),   # tablet
+@pytest.mark.parametrize("agent", [
+    "Mozilla/5.0 (Linux; Android 16; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 19_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/19.0 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
 ])
-def test_phones_are_turned_away(client, agent, allowed):
+def test_phones_can_sign_up(client, agent):
     import backend.db as db
     headers = {**c_h(client), "User-Agent": agent}
     body = {"username": "P02", "password": "dlhe-heslo-123", "password_confirm": "dlhe-heslo-123"}
-    assert client.get("/api/bootstrap", headers=headers).status_code == (200 if allowed else 403)
-    r = client.post("/api/enrollment/begin", json=body, headers=headers)
-    assert r.status_code == (200 if allowed else 403)
-    assert (db.get_user_by_username("P02") is not None) == allowed     # telefón účet ani nezaloží
-    if not allowed:
-        assert "fyzickú klávesnicu" in r.get_json()["error"]
-        assert client.post("/api/verification/begin", json={"username": "P02"}, headers=headers).status_code == 403
-        assert client.get("/api/health", headers=headers).status_code == 200   # health check hostingu
+    assert client.get("/api/bootstrap", headers=headers).status_code == 200
+    assert client.post("/api/enrollment/begin", json=body, headers=headers).status_code == 200
+    assert db.get_user_by_username("P02") is not None
 
 
 def test_client_cannot_enable_test_mode(client):

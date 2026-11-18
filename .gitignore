@@ -13,3 +13,6 @@ pages/dist/
 pages/node_modules/
 pages/.wrangler/
 node_modules/
+
+# archív na odovzdanie sa robí z repozitára (git archive)
+odovzdanie/*.zip

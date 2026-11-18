@@ -58,7 +58,6 @@ from .sentences import DEFAULT_LANGUAGE, LANGUAGES, next_phrase
 FRONTEND = Path(__file__).resolve().parents[1] / "frontend"
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{3,32}$")
 ATTEMPT_TYPES = {"genuine", "impostor", "imitacia"}
-PHONE_RE = re.compile(r"Mobi|iPhone|iPod")   # tablety (bez "Mobi") môžu mať pripojenú klávesnicu
 
 app = Flask(__name__, static_folder=None)  # vlastná /static cesta nižšie obsluhuje frontend/
 app.secret_key = settings.SECRET_KEY
@@ -308,15 +307,6 @@ def store_attempt(
 def only_through_proxy():
     if settings.PROXY_SECRET and request.path != "/api/health" and not via_trusted_proxy():
         return jsonify(error="Neautorizované"), 403
-
-
-@app.before_request
-def no_phones():
-    # Dotyková klávesnica nehlási držanie kláves, takže z telefónu šablóna ani pokus nevzniknú.
-    # Hlavička sa dá sfalšovať; je to ochrana pred omylom, nie bezpečnostná hranica.
-    if request.path.startswith("/api/") and request.path != "/api/health" \
-            and PHONE_RE.search(request.headers.get("User-Agent", "")):
-        return jsonify(error="Z telefónu to nejde: treba fyzickú klávesnicu. Otvor stránku na počítači."), 403
 
 
 @app.errorhandler(HumanCheckFailed)

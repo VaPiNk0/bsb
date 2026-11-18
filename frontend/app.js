@@ -66,11 +66,22 @@ class TypingCapture {
     this.caret = document.createElement("span");
     this.caret.className = "caret";
     this.text.append(this.caret);
-    this.root.replaceChildren(this.text);
+    // Neviditeľné pole cez celú plochu: na telefóne ťuknutie naň otvorí dotykovú klávesnicu.
+    // Klávesy z neho prebublajú do this.root; čo prehliadač nehlási ako klávesu, prečíta touchInput.
+    this.input = document.createElement("textarea");
+    this.input.className = "touch-input";
+    this.input.tabIndex = -1;
+    this.input.setAttribute("aria-hidden", "true");
+    for (const [name, value] of [["autocomplete", "off"], ["autocorrect", "off"], ["autocapitalize", "none"], ["spellcheck", "false"]]) {
+      this.input.setAttribute(name, value);
+    }
+    this.root.replaceChildren(this.text, this.input);
 
     this.phrase = "";
     this.cells = [];
     this.held = new Map();      // event.code -> index v this.events (klávesa je ešte dole)
+    this.inputValue = "";       // obsah this.input po poslednom spracovaní
+    this.keyPending = null;     // klávesa započítaná z keydown, ktorú prehliadač aj tak vložil do poľa
     this.onComplete = null;
     this.onInvalid = null;
     this.onHint = null;
@@ -82,6 +93,8 @@ class TypingCapture {
   bind() {
     this.root.addEventListener("keydown", (event) => this.keydown(event));
     this.root.addEventListener("keyup", (event) => this.keyup(event));
+    this.input.addEventListener("input", (event) => this.touchInput(event));
+    this.root.addEventListener("click", () => this.input.focus({ preventScroll: true }));
     this.root.addEventListener("paste", (event) => {
       event.preventDefault();
       this.invalid(t("Vkladanie textu nie je povolené.", "Pasting text is not allowed."));
@@ -105,6 +118,9 @@ class TypingCapture {
     this.state = "idle";
     this.t0 = 0;
     this.held.clear();
+    this.input.value = "";
+    this.inputValue = "";
+    this.keyPending = null;
     this.root.classList.remove("invalid", "complete", "busy");
   }
 
@@ -129,7 +145,7 @@ class TypingCapture {
     void this.root.offsetWidth;
     this.root.classList.add("swap");
     this.render();
-    this.root.focus({ preventScroll: true });
+    this.input.focus({ preventScroll: true });
   }
 
   stop() {
@@ -216,15 +232,42 @@ class TypingCapture {
     }
   }
 
-  push(event, key) {
+  // `id` je klávesa, ktorá je ešte dole; null znamená stlačenie bez času uvoľnenia (dotyková klávesnica)
+  push(event, key, id) {
     if (!this.started && this.onStart) this.onStart();
-    this.held.set(event.code, this.events.length);
-    this.events.push({ key, code: event.code, down: this.stamp(event), up: null });
+    const down = this.stamp(event);
+    if (id !== null) this.held.set(id, this.events.length);
+    this.events.push({ key, code: event.code || "touch", down, up: id === null ? down : null });
+  }
+
+  erase(event, id) {
+    if (this.buffer.length === 0 || this.held.has(id)) return;
+    if (this.corrections >= BOOT.max_corrections) {
+      this.invalid(t("Príliš veľa opráv.", "Too many corrections."));
+      return;
+    }
+    this.corrections += 1;
+    this.push(event, "Backspace", id);
+    this.buffer.pop();
+    this.render();
+  }
+
+  type(event, key, id) {
+    if (!ALPHABET.includes(key)) {
+      this.onHint?.(t("Používaj len malé písmená bez diakritiky a medzeru.", "Use only lowercase letters without accents and the space bar."));
+      return;
+    }
+    if (this.buffer.length >= this.phrase.length + 6 || this.held.has(id)) return;
+    this.push(event, key, id);
+    this.buffer.push(key);
+    this.render();
   }
 
   keydown(event) {
     // klávesnicová navigácia a funkčné klávesy (F5, F12) musia fungovať ďalej
     if (event.key === "Tab" || /^F\d+$/.test(event.key)) return;
+    // Dotyková klávesnica (Android) znak v keydown neprezradí; vloží ho do poľa a prečíta ho touchInput.
+    if (event.key === "Unidentified" || event.key === "Process" || event.isComposing) return;
     event.preventDefault();
     if (!this.active || event.repeat) return;
     if (event.ctrlKey || event.metaKey || event.altKey) {
@@ -235,39 +278,46 @@ class TypingCapture {
       this.invalid(t("Píš len malé písmená (bez Shiftu, vypni Caps Lock).", "Type lowercase letters only (no Shift, turn off Caps Lock)."));
       return;
     }
-
+    // dotyková klávesnica na iOS nemá event.code
+    const id = event.code || event.key;
     if (event.key === "Backspace") {
-      if (this.buffer.length === 0 || this.held.has(event.code)) return;
-      if (this.corrections >= BOOT.max_corrections) {
-        this.invalid(t("Príliš veľa opráv.", "Too many corrections."));
-        return;
-      }
-      this.corrections += 1;
-      this.push(event, "Backspace");
-      this.buffer.pop();
-      this.render();
+      this.keyPending = "Backspace";
+      this.erase(event, id);
       return;
     }
-
     // ostatné nepísmenové klávesy (šípky, Enter...) ticho ignorujeme
     if (event.key.length !== 1) return;
-    if (!ALPHABET.includes(event.key)) {
-      this.onHint?.(t("Používaj len malé písmená bez diakritiky a medzeru.", "Use only lowercase letters without accents and the space bar."));
-      return;
-    }
-    if (this.buffer.length >= this.phrase.length + 6 || this.held.has(event.code)) return;
-    this.push(event, event.key);
-    this.buffer.push(event.key);
-    this.render();
+    this.keyPending = event.key;
+    this.type(event, event.key, id);
   }
 
   keyup(event) {
+    this.keyPending = null;
     if (!this.active) return;
-    const index = this.held.get(event.code);
+    const index = this.held.get(event.code || event.key);
     if (index === undefined) return;
     this.events[index].up = Math.max(this.stamp(event), this.events[index].down);
-    this.held.delete(event.code);
+    this.held.delete(event.code || event.key);
     this.paintRhythm();
+    this.checkComplete();
+  }
+
+  // Zmena obsahu poľa z dotykovej klávesnice: čo pribudlo, sú napísané znaky, čo ubudlo, Backspace.
+  // Držanie klávesy sa takto nedá zmerať (down = up), rytmus medzi stlačeniami áno.
+  touchInput(event) {
+    const before = this.inputValue;
+    const after = this.input.value;
+    this.inputValue = after;
+    if (!this.active) return;
+    let same = 0;
+    while (same < before.length && same < after.length && before[same] === after[same]) same += 1;
+    const removed = before.length - same;
+    let added = after.slice(same);
+    // keydown už znak započítal, prehliadač ho len napriek preventDefault vložil aj do poľa
+    if (this.keyPending === "Backspace" && removed === 1 && !added) return;
+    if (this.keyPending && added === this.keyPending && !removed) return;
+    for (let i = 0; i < removed && this.active; i += 1) this.erase(event, null);
+    for (const ch of added.toLowerCase()) if (this.active) this.type(event, ch, null);
     this.checkComplete();
   }
 
@@ -299,6 +349,7 @@ function renderTurnstile() {
     if (turnstileWidgets[name] !== undefined) window.turnstile.remove(turnstileWidgets[name]);
     turnstileWidgets[name] = window.turnstile.render(box, {
       sitekey: BOOT.turnstile_site_key, language: LANG, theme: document.documentElement.dataset.theme || "auto",
+      size: matchMedia("(max-width: 400px)").matches ? "compact" : "normal",   // normálny widget má 300 px
     });
   }
 }
@@ -794,19 +845,9 @@ function buildFlows() {
   };
 }
 
-// Telefón server odmieta (rovnaký test hlavičky User-Agent je v backend/app.py), preto mu
-// namiesto aplikácie ukážeme len zamietaciu obrazovku.
-function isPhone() {
-  return navigator.userAgentData?.mobile ?? /Mobi|iPhone|iPod/.test(navigator.userAgent);
-}
-
 function setup() {
-  if (isPhone()) {
-    document.querySelectorAll("main > :not(.topbar), #configPill").forEach((el) => { el.hidden = el.id !== "phoneBlock"; });
-    return;
-  }
   drawDemo();
-  // Systém meria držanie kláves, čo dotyková klávesnica neposkytuje (a plocha na písanie ju ani neotvorí).
+  // Dotyková klávesnica nehlási držanie kláves; šablóna z nej sa preto hodí len na to isté zariadenie.
   $("touchNotice").hidden = !matchMedia("(hover: none) and (pointer: coarse)").matches;
   fetch("/api/bootstrap").then((r) => r.json()).then((boot) => {
     BOOT = boot;

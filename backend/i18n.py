@@ -24,7 +24,6 @@ EXACT = {
     "Používateľ existuje, ale heslo nesedí.": "This user exists, but the password is wrong.",
     "Registrácia tohto mena práve prebieha. Skús to znova.": "A sign-up with this username is in progress. Try again.",
     "Na serveri nastala chyba. Skús to o chvíľu znova.": "The server ran into an error. Try again in a moment.",
-    "Z telefónu to nejde: treba fyzickú klávesnicu. Otvor stránku na počítači.": "Phones are not supported: a physical keyboard is needed. Open the page on a computer.",
     "Používateľ neexistuje": "This user does not exist",
     "Challenge je neplatný alebo expirovaný": "The challenge is invalid or expired",
     "Challenge je neplatný, použitý alebo expirovaný.": "The challenge is invalid, used or expired.",

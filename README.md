@@ -156,6 +156,7 @@ Berie sa rozhodnutie, ktoré systém pri pokuse naozaj urobil (uložené skóre 
 
 - **Malý dataset:** EER/FAR/FRR budú mať vysokú neistotu; jeden chybný pokus môže výrazne zmeniť percentá.
 - **Keyboard/device dependence:** dwell a flight times závisia od typu klávesnice, OS, browsera, latencie a fyzických návykov.
+- **Telefón:** stránka funguje aj na mobile. Plochu na písanie prekrýva neviditeľné textové pole, takže ťuknutie otvorí dotykovú klávesnicu. Android (Gboard) v `keydown` znak neprezradí (`Unidentified`), preto sa znaky čítajú z udalosti `input` a majú `down = up`: dwell je nulový a meria sa len rytmus medzi písmenami (DD/UD). iOS a pripojená klávesnica posielajú bežné `keydown`/`keyup`. Šablóna z telefónu sa preto hodí len na prihlásenie z toho istého zariadenia.
 - **Session/time drift:** únava, stres alebo zmena pracovného prostredia menia rytmus.
 - **Text-dependent → free-ish text:** meniaca sa veta zvyšuje variabilitu (rôzne bigramy v každom pokuse), takže EER bude pravdepodobne horší než pri jednej pevnej vete. Je to cena za to, že sa veta nedá naučiť naspamäť ani zachytiť a prehrať.
 - **Challenge/replay:** detekcia identického vektora nie je plnohodnotná anti-replay kryptografia.
