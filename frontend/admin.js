@@ -1,3 +1,6 @@
+const DEVICE_NAMES = { pc: t("počítač", "computer"), mobile: t("telefón", "phone") };
+const deviceName = (device) => DEVICE_NAMES[device || "pc"] || device;
+
 async function loadAdmin() {
   const response = await fetch("/api/admin/overview", { headers: { "X-Lang": LANG } });
   const data = await response.json();
@@ -15,10 +18,11 @@ async function loadAdmin() {
   ];
   document.getElementById("statsGrid").innerHTML = stats.map(([label, value]) => `<div class="stat"><span>${escapeHtml(String(label))}</span><strong>${escapeHtml(String(value))}</strong></div>`).join("");
 
+  // každé zariadenie (počítač / telefón) má vlastnú šablónu, cyklus aj termín obnovy
   document.getElementById("usersTable").innerHTML = data.users.map((u) => {
-    const r = u.refresh;
-    const refreshBadge = !u.enrolled ? '<span class="badge neutral">—</span>'
-      : r.due ? `<span class="badge bad">${t(`po termíne (${r.days_since} dní)`, `overdue (${r.days_since} days)`)}</span>`
+    const lines = (render) => u.templates.length ? u.templates.map(render).join("<br>") : "—";
+    const refreshBadge = (r) => r.due
+      ? `<span class="badge bad">${t(`po termíne (${r.days_since} dní)`, `overdue (${r.days_since} days)`)}</span>`
       : `<span class="badge ok">${t(`o ${r.due_in_days} dní`, `in ${r.due_in_days} days`)}</span>`;
     const age = data.test_mode_allowed && u.enrolled
       ? `<button class="secondary age-btn" data-user="${u.id}" data-days="${data.refresh_days}">${t("Posunúť o mesiac", "Age by a month")}</button>` : "";
@@ -26,9 +30,9 @@ async function loadAdmin() {
     <tr>
       <td>${escapeHtml(u.username)}</td>
       <td class="num">${u.enrollment_count}</td>
-      <td><span class="badge ${u.enrolled ? "ok" : "warn"}">${u.enrolled ? t("áno", "yes") : t("nie", "no")}</span></td>
-      <td class="num">${u.template_cycle || 0}</td>
-      <td>${refreshBadge}</td>
+      <td>${u.enrolled ? lines((r) => `<span class="badge ok">${escapeHtml(deviceName(r.device))}</span>`) : `<span class="badge warn">${t("nie", "no")}</span>`}</td>
+      <td class="num">${lines((r) => r.cycle)}</td>
+      <td>${lines(refreshBadge)}</td>
       <td class="num">${u.failed_count}</td>
       <td>${u.lock_until ? escapeHtml(new Date(u.lock_until).toLocaleString(LOCALE)) : "—"}</td>
       <td>${age}</td>
@@ -51,6 +55,7 @@ async function loadAdmin() {
     <tr>
       <td>${escapeHtml(new Date(a.created_at).toLocaleString(LOCALE))}</td>
       <td>${escapeHtml(a.username)}</td>
+      <td>${escapeHtml(deviceName(a.device))}</td>
       <td>${escapeHtml(a.actor_label || "—")}</td>
       <td><span class="badge ${a.attempt_type === "genuine" ? "ok" : a.attempt_type === "imitacia" ? "warn" : "bad"}">${escapeHtml(a.attempt_type)}</span></td>
       <td class="num">${a.score === null ? "—" : Number(a.score).toFixed(4)}</td>
@@ -86,7 +91,7 @@ function renderHistory(history) {
     const note = h.threshold_capped ? t("prah na strope, zváž novú registráciu", "threshold at its ceiling, consider a new sign-up") : "—";
     return `<tr>
       <td>${escapeHtml(new Date(h.created_at).toLocaleString(LOCALE))}</td>
-      <td>${escapeHtml(h.username)}</td>
+      <td>${escapeHtml(h.username)} (${escapeHtml(deviceName(h.device))})</td>
       <td class="num">${h.cycle}</td>
       <td><span class="badge ${kind}">${label}</span></td>
       <td class="num">${pctText(h.speed_change_pct)}</td>
@@ -99,7 +104,8 @@ function renderHistory(history) {
   // graf: medián času medzi stlačeniami (ms) v jednotlivých cykloch; nižšie = rýchlejšie písanie
   const byUser = {};
   history.forEach((h) => {
-    const list = (byUser[h.username] = byUser[h.username] || []);
+    const key = `${h.username} (${deviceName(h.device)})`;
+    const list = (byUser[key] = byUser[key] || []);
     if (!list.length && h.median_dd_old) list.push({ cycle: h.cycle - 1, v: h.median_dd_old });
     if (h.median_dd_new) list.push({ cycle: h.cycle, v: h.median_dd_new });
   });
@@ -150,7 +156,7 @@ const EXCLUDED = {
   duplicate_feature_vector: "replay",
   insufficient_features: t("málo použiteľných kláves", "too few usable keys"),
   unknown_user: t("neznámy účet", "unknown account"),
-  not_enrolled: t("nedokončená registrácia", "unfinished sign-up"),
+  not_enrolled: t("bez šablóny pre zariadenie", "no template for the device"),
 };
 
 function numText(v, digits) {
@@ -207,6 +213,7 @@ function renderReport(report) {
   document.getElementById("userResultsTable").innerHTML = report.users.map((u) => `
     <tr>
       <td>${escapeHtml(u.username)}</td>
+      <td>${escapeHtml(deviceName(u.device))}</td>
       <td class="num">${u.enrollment_n}</td>
       <td class="num">${u.median_dwell_ms === null ? "—" : `${numText(u.median_dwell_ms, 0)} ms`}</td>
       <td class="num">${u.median_dd_ms === null ? "—" : `${numText(u.median_dd_ms, 0)} ms`}</td>

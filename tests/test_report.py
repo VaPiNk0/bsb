@@ -39,7 +39,7 @@ def test_report_counts_only_scored_attempts():
     vector = [None] * FEATURE_COUNT
     vector[DWELL_INDEX], vector[DD_INDEX] = 95.0, 180.0
     samples = [{"user_id": 1, "features_json": json.dumps(vector)}] * 12
-    report = build_report(attempts, [{"id": 1, "username": "P01"}], samples, {1: 1.25})
+    report = build_report(attempts, [{"id": 1, "username": "P01"}], samples, {(1, "pc"): 1.25})
 
     by_name = {s["scenario"]: s for s in report["scenarios"]}
     assert (by_name["genuine"]["n"], by_name["genuine"]["errors"], by_name["genuine"]["rate"]) == (10, 1, 0.1)

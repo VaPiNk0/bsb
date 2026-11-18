@@ -5,7 +5,7 @@ const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 
-const context = { t: (sk) => sk, document: { addEventListener() {} }, console };
+const context = { t: (sk) => sk, document: { addEventListener() {} }, matchMedia: () => ({ matches: false }), console };
 vm.createContext(context);
 vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "frontend", "app.js"), "utf8"), context);
 

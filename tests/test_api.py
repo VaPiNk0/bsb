@@ -6,12 +6,14 @@ import tempfile
 
 import pytest
 
-def make_events(phrase, rng, sig=0, scale=1.0, jitter=15.0):
-    """Rytmus závisí od znaku/bigramu (podpis používateľa `sig`), takže funguje pre každú vetu."""
+def make_events(phrase, rng, sig=0, scale=1.0, jitter=15.0, touch=False):
+    """Rytmus závisí od znaku/bigramu (podpis používateľa `sig`), takže funguje pre každú vetu.
+    `touch`: dotyková klávesnica nehlási držanie klávesy, takže down = up."""
     events, t = [], 100.0
     for i, ch in enumerate(phrase):
         dwell = ((70 + (ord(ch) * 7 + sig * 13) % 40) * scale) + rng.gauss(0, jitter)
-        events.append({"key": ch, "code": "x", "down": round(t, 3), "up": round(t + dwell, 3)})
+        up = t if touch else t + dwell
+        events.append({"key": ch, "code": "touch" if touch else "x", "down": round(t, 3), "up": round(up, 3)})
         nxt = phrase[i + 1] if i + 1 < len(phrase) else " "
         gap = ((110 + ((ord(ch) + ord(nxt)) * 5 + sig * 17) % 70) * scale) + rng.gauss(0, jitter)
         t += dwell + max(gap, 20.0)
@@ -51,24 +53,27 @@ def client(monkeypatch, request):
         db._pool.close()
 
 
-def enroll(c, username="P01", password="dlhe-heslo-123", n=12, jitter=15.0):
+def enroll(c, username="P01", password="dlhe-heslo-123", n=12, jitter=15.0, device="pc", pair_code=None, **kw):
     rng = random.Random(1)
     uid = None
     for _ in range(n):
-        b = c.post("/api/enrollment/begin", json={"username": username, "password": password,
-                                                  "password_confirm": password}, headers=c.csrf).get_json()
+        r = c.post("/api/enrollment/begin", json={"username": username, "password": password,
+                                                  "password_confirm": password, "device": device,
+                                                  "pair_code": pair_code}, headers=c.csrf)
+        assert r.status_code == 200, r.get_json()
+        b = r.get_json()
         uid = b["user_id"]
         r = c.post("/api/enrollment/sample", json={"user_id": uid, "challenge": b["challenge"],
-                                                   "events": make_events(b["phrase"], rng, jitter=jitter)}, headers=c.csrf)
+                                                   "events": make_events(b["phrase"], rng, jitter=jitter, **kw)}, headers=c.csrf)
         assert r.status_code == 200, r.get_json()
-    r = c.post("/api/enrollment/finish", json={"user_id": uid}, headers=c.csrf)
+    r = c.post("/api/enrollment/finish", json={"user_id": uid, "device": device}, headers=c.csrf)
     assert r.status_code == 200, r.get_json()
 
 
-def verify(c, username, password, rng, **kw):
-    b = c.post("/api/verification/begin", json={"username": username}, headers=c.csrf).get_json()
+def verify(c, username, password, rng, device="pc", **kw):
+    b = c.post("/api/verification/begin", json={"username": username, "device": device}, headers=c.csrf).get_json()
     return c.post("/api/verification", json={"username": username, "password": password,
-                                             "challenge": b["challenge"],
+                                             "challenge": b["challenge"], "device": device,
                                              "events": make_events(b["phrase"], rng, **kw)}, headers=c.csrf)
 
 
@@ -383,12 +388,12 @@ def test_template_from_older_scoring_is_rebuilt_on_login(client):
     from backend.scoring import TEMPLATE_VERSION
     enroll(client)
     user = db.get_user_by_username("P01")
-    stale = json.loads(user["template_json"])
+    stale = json.loads(db.get_template(user["id"], "pc")["template_json"])
     stale["version"] = TEMPLATE_VERSION - 1
     stale["threshold"] = 99.0
-    db.save_template(user["id"], stale)
+    db.save_template(user["id"], "pc", stale)
     assert login(client)["threshold"] < 10
-    assert json.loads(db.get_user_by_username("P01")["template_json"])["version"] == TEMPLATE_VERSION
+    assert json.loads(db.get_template(user["id"], "pc")["template_json"])["version"] == TEMPLATE_VERSION
 
 
 def test_enrollment_checks_password_of_existing_account(client):
@@ -511,3 +516,120 @@ def test_errors_are_translated_on_request(client):
     english = client.post("/api/enrollment/begin", json=body, headers={**c_h(client), "X-Lang": "en"}).get_json()["error"]
     assert slovak == "Heslo musí mať aspoň 10 znakov"
     assert english == "The password must be at least 10 characters"
+
+
+# ---------- počítač a telefón: dve šablóny jedného účtu ----------
+
+def other_client(client):
+    """Druhé zariadenie: vlastná relácia (cookies) proti tej istej aplikácii."""
+    import backend.app as appmod
+    c = appmod.app.test_client()
+    c.environ_base.update(client.environ_base)
+    c.csrf = {"X-CSRF-Token": c.get("/api/bootstrap").get_json()["csrf"]}
+    return c
+
+
+def pair_code(client, device="mobile"):
+    """Prihlási P01 na počítači a vydá kód na pridanie ďalšieho zariadenia."""
+    data = login(client)
+    assert data["missing_devices"] == [device]
+    r = client.post("/api/devices/pair", json={"device": device}, headers=c_h(client))
+    assert r.status_code == 200, r.get_json()
+    return r.get_json()["code"]
+
+
+def test_phone_without_its_own_template_cannot_log_in(client):
+    """Šablóna z počítača neplatí pre telefón; pokus skončí generickou chybou, nie slučkou viet."""
+    import backend.db as db
+    enroll(client)
+    r = verify(client, "P01", "dlhe-heslo-123", random.Random(5), device="mobile", touch=True)
+    assert r.status_code == 401 and r.get_json()["error"] == "Autentifikácia zlyhala."
+    assert db.list_attempts(1)[0]["reason"] == "not_enrolled"
+
+
+def test_second_device_needs_a_pairing_code(client):
+    """Kto pozná len heslo, nesmie k účtu pridať vlastnú šablónu: obišiel by druhý faktor."""
+    enroll(client)
+    phone = other_client(client)
+    body = {"username": "P01", "password": "dlhe-heslo-123", "password_confirm": "dlhe-heslo-123", "device": "mobile"}
+    r = phone.post("/api/enrollment/begin", json=body, headers=phone.csrf)
+    assert r.status_code == 403 and r.get_json()["pair_required"] is True
+    r = phone.post("/api/enrollment/begin", json={**body, "pair_code": "ABCD-EFGH"}, headers=phone.csrf)
+    assert r.status_code == 403
+    # aj s platným kódom treba heslo
+    code = pair_code(client)
+    wrong = {**body, "password": "zle-heslo-12345", "password_confirm": "zle-heslo-12345", "pair_code": code}
+    assert phone.post("/api/enrollment/begin", json=wrong, headers=phone.csrf).status_code == 409
+
+
+def test_pairing_code_is_only_for_logged_in_users(client):
+    enroll(client)
+    r = client.post("/api/devices/pair", json={"device": "mobile"}, headers=c_h(client))
+    assert r.status_code == 401
+
+
+def test_one_account_logs_in_on_computer_and_phone(client):
+    """Telefón dostane vlastnú šablónu (iný rytmus, bez držania kláves); každé zariadenie sa
+    porovnáva so svojou a cudzia šablóna sa nepoužije."""
+    import backend.db as db
+    enroll(client)
+    code = pair_code(client)
+    phone = other_client(client)
+    enroll(phone, device="mobile", pair_code=code, touch=True, sig=4, scale=1.6)
+    user_id = db.get_user_by_username("P01")["id"]
+    assert sorted(row["device"] for row in db.get_templates(user_id)) == ["mobile", "pc"]
+    assert len(db.get_enrollment_samples(user_id, "pc")) == 12
+    assert len(db.get_enrollment_samples(user_id, "mobile")) == 12
+
+    r = verify(phone, "P01", "dlhe-heslo-123", random.Random(60), device="mobile", touch=True, sig=4, scale=1.6, jitter=5.0)
+    assert r.status_code == 200, r.get_json()
+    assert r.get_json()["device"] == "mobile" and r.get_json()["missing_devices"] == []
+    assert login(client)["device"] == "pc"
+    # písanie z počítača proti šablóne telefónu neprejde
+    r = verify(phone, "P01", "dlhe-heslo-123", random.Random(61), device="mobile", jitter=5.0)
+    assert r.status_code == 401
+    # druhá šablóna pre to isté zariadenie nevznikne
+    r = phone.post("/api/enrollment/begin", json={"username": "P01", "password": "dlhe-heslo-123",
+                                                  "password_confirm": "dlhe-heslo-123", "device": "mobile"}, headers=phone.csrf)
+    assert r.status_code == 409
+
+    report = client.get("/api/admin/overview").get_json()["report"]
+    assert sorted((u["username"], u["device"], u["enrollment_n"]) for u in report["users"]) == [
+        ("P01", "mobile", 12), ("P01", "pc", 12)]
+
+
+def test_pairing_code_works_once_and_for_its_device(client):
+    enroll(client)
+    code = pair_code(client)
+    body = {"username": "P01", "password": "dlhe-heslo-123", "password_confirm": "dlhe-heslo-123", "pair_code": code}
+    laptop = other_client(client)
+    assert laptop.post("/api/enrollment/begin", json={**body, "device": "pc"}, headers=laptop.csrf).status_code == 409
+    phone = other_client(client)
+    assert phone.post("/api/enrollment/begin", json={**body, "device": "mobile"}, headers=phone.csrf).status_code == 200
+    another = other_client(client)
+    assert another.post("/api/enrollment/begin", json={**body, "device": "mobile"}, headers=another.csrf).status_code == 403
+
+
+def test_signup_can_only_be_finished_by_its_own_session(client):
+    import backend.db as db
+    enroll(client)
+    user_id = db.get_user_by_username("P01")["id"]
+    stranger = other_client(client)
+    r = stranger.post("/api/enrollment/finish", json={"user_id": user_id, "device": "mobile"}, headers=stranger.csrf)
+    assert r.status_code == 400
+
+
+def test_old_single_template_moves_to_computer(client):
+    """Databáza spred rozdelenia mala šablónu v users.template_json; po štarte je to šablóna počítača."""
+    import backend.db as db
+    enroll(client)
+    user_id = db.get_user_by_username("P01")["id"]
+    tpl = db.get_template(user_id, "pc")
+    with db._connect() as conn:
+        conn.execute("DELETE FROM templates")
+        conn.execute("UPDATE users SET template_json = ?, template_cycle = 2 WHERE id = ?", (tpl["template_json"], user_id))
+    db.init_db()
+    moved = db.get_template(user_id, "pc")
+    assert moved["template_json"] == tpl["template_json"] and moved["cycle"] == 2
+    assert db.get_user(user_id)["template_json"] is None
+    assert login(client)["accepted"] is True

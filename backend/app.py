@@ -19,6 +19,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from .config import settings
 from .db import (
+    DEVICES,
     IntegrityError,
     add_enrollment_sample,
     add_refresh_sample,
@@ -29,6 +30,8 @@ from .db import (
     create_user,
     duplicate_attempt_exists,
     get_enrollment_samples,
+    get_template,
+    get_templates,
     get_user,
     get_user_by_username,
     get_refresh_samples,
@@ -42,6 +45,7 @@ from .db import (
     list_report_attempts,
     list_templates,
     list_users,
+    next_sample_index,
     recent_attempt_count,
     save_template,
     feature_hash,
@@ -58,6 +62,9 @@ from .sentences import DEFAULT_LANGUAGE, LANGUAGES, next_phrase
 FRONTEND = Path(__file__).resolve().parents[1] / "frontend"
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{3,32}$")
 ATTEMPT_TYPES = {"genuine", "impostor", "imitacia"}
+PAIR_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   # bez 0/O a 1/I, aby sa kód dal bez chyby opísať
+PAIR_CODE_LENGTH = 8
+PAIR_TTL_SECONDS = 600
 
 app = Flask(__name__, static_folder=None)  # vlastná /static cesta nižšie obsluhuje frontend/
 app.secret_key = settings.SECRET_KEY
@@ -169,20 +176,29 @@ def is_locked(user) -> bool:
     return datetime.fromisoformat(lock_until) > datetime.now(timezone.utc)
 
 
-def refresh_info(user) -> dict:
-    """Stav mesačnej obnovy šablóny pre daného používateľa."""
-    base = user["template_updated_at"] or user["created_at"]
-    updated = datetime.fromisoformat(base)
+def request_device(body: dict) -> str:
+    """Typ zariadenia, z ktorého klient píše ("pc" alebo "mobile"). Každý typ má vlastnú šablónu.
+    Údaj pochádza od klienta; podvrhnutím si útočník vyberie len to, s ktorou šablónou účtu ho porovnáme."""
+    device = str(body.get("device") or "pc")
+    if device not in DEVICES:
+        raise ValueError("Neznámy typ zariadenia")
+    return device
+
+
+def refresh_info(tpl) -> dict:
+    """Stav mesačnej obnovy jednej šablóny (riadok z tabuľky templates)."""
+    updated = datetime.fromisoformat(tpl["updated_at"])
     due_at = updated + timedelta(days=settings.TEMPLATE_REFRESH_DAYS)
     now = datetime.now(timezone.utc)
-    cycle = int(user["template_cycle"] or 0)
+    cycle = int(tpl["cycle"] or 0)
     return {
-        "due": bool(user["template_json"]) and now >= due_at,
+        "device": tpl["device"],
+        "due": now >= due_at,
         "days_since": max(0, (now - updated).days),
         "interval_days": settings.TEMPLATE_REFRESH_DAYS,
         "due_in_days": (due_at - now).days,
         "cycle": cycle,
-        "pending": len(get_refresh_samples(int(user["id"]), cycle + 1)),
+        "pending": len(get_refresh_samples(int(tpl["user_id"]), cycle + 1, tpl["device"])),
         "needed": settings.REFRESH_SAMPLES,
     }
 
@@ -202,29 +218,36 @@ def make_template(vectors: list[list[float | None]]) -> dict:
     )
 
 
-def current_template(user) -> dict:
-    """Šablóna používateľa; ak ju vytvorila iná konfigurácia alebo staršia verzia skórovania,
-    prepočíta sa z uložených enrollment vzoriek (posledných MAX_ENROLLMENT)."""
-    template = json.loads(user["template_json"])
+def current_template(tpl) -> dict:
+    """Šablóna účtu pre jedno zariadenie; ak ju vytvorila iná konfigurácia alebo staršia verzia
+    skórovania, prepočíta sa z uložených vzoriek toho zariadenia (posledných MAX_ENROLLMENT)."""
+    template = json.loads(tpl["template_json"])
     if (
         template.get("version") == TEMPLATE_VERSION
         and template["metric"] == settings.METRIC
         and float(template["k"]) == settings.K
     ):
         return template
-    user_id = int(user["id"])
-    template = make_template(vectors_of(get_enrollment_samples(user_id)[-settings.MAX_ENROLLMENT:]))
-    save_template(user_id, template)
+    user_id, device = int(tpl["user_id"]), tpl["device"]
+    template = make_template(vectors_of(get_enrollment_samples(user_id, device)[-settings.MAX_ENROLLMENT:]))
+    save_template(user_id, device, template)
     return template
 
 
 def session_user():
+    """Prihlásený používateľ a šablóna zariadenia, z ktorého sa prihlásil."""
     if "auth_user_id" not in session:
         raise PermissionError("Najprv sa prihlás.")
     user = get_user(int(session["auth_user_id"]))
-    if not user or not user["template_json"]:
+    tpl = get_template(int(user["id"]), session.get("auth_device", "pc")) if user else None
+    if not tpl:
         raise PermissionError("Najprv sa prihlás.")
-    return user
+    return user, tpl
+
+
+def pair_code_digits(code: str) -> str:
+    """Kód tak, ako ho používateľ opísal: bez medzier a pomlčiek, veľkými písmenami."""
+    return re.sub(r"[\s-]", "", str(code or "")).upper()[:32]
 
 
 def is_admin(username: str) -> bool:
@@ -245,11 +268,11 @@ def verify_rate_limit(username: str) -> None:
         raise PermissionError("Príliš veľa pokusov, chvíľu počkaj.")
 
 
-def make_challenge(user_id: int, purpose: str, lang: str) -> tuple[str, int, str]:
-    """Každý challenge nesie vlastnú vetu; server si ju pamätá, klient ju nevie zmeniť."""
+def make_challenge(user_id: int, purpose: str, lang: str, device: str) -> tuple[str, int, str]:
+    """Každý challenge nesie vlastnú vetu a zariadenie; server si ich pamätá, klient ich nevie zmeniť."""
     token = secrets.token_urlsafe(32)
     phrase, _source = next_phrase(lang)
-    challenge_id = create_challenge(user_id, purpose, token, settings.CHALLENGE_TTL_SECONDS, phrase)
+    challenge_id = create_challenge(user_id, purpose, token, settings.CHALLENGE_TTL_SECONDS, phrase, device)
     return token, challenge_id, phrase
 
 
@@ -277,7 +300,7 @@ def store_attempt(
     impersonated: str | None, score: float | None, threshold: float | None,
     accepted: bool, features: list[float] | None, challenge_id: int | None,
     replay: bool = False, reason: str | None = None, phrase: str | None = None,
-    test_mode: bool = False,
+    test_mode: bool = False, device: str | None = None,
 ) -> None:
     digest = feature_hash(features) if features is not None else None
     insert_attempt(
@@ -298,6 +321,7 @@ def store_attempt(
             "reason": reason,
             "ip": client_ip(),
             "test_mode": 1 if test_mode else 0,
+            "device": device,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
     )
@@ -392,17 +416,28 @@ def enrollment_begin():
             raise ValueError("Heslo musí mať aspoň 10 znakov")
         if password != confirm:
             raise ValueError("Heslá sa nezhodujú")
+        device = request_device(body)
         require_human(body)
 
         user = get_user_by_username(username)
         if user:
-            if user["template_json"]:
-                return jsonify(error="Používateľ už má vytvorenú šablónu."), 409
             user_id = int(user["id"])
-            # Heslo sa pri registrácii overuje raz; ďalšie vety tej istej relácie už scrypt
-            # nepočítajú znova (inak ~0,3 s navyše pred každou vetou).
-            if session.get("enroll_user_id") != user_id and not check_password_hash(user["password_hash"], password):
-                return jsonify(error="Používateľ existuje, ale heslo nesedí."), 409
+            templates = get_templates(user_id)
+            if any(tpl["device"] == device for tpl in templates):
+                return jsonify(error="Tento účet už má šablónu pre tento typ zariadenia."), 409
+            # Heslo (a párovací kód) sa pri registrácii overuje raz; ďalšie vety tej istej relácie
+            # už scrypt nepočítajú znova (inak ~0,3 s navyše pred každou vetou).
+            if session.get("enroll_user_id") != user_id or session.get("enroll_device") != device:
+                if not check_password_hash(user["password_hash"], password):
+                    return jsonify(error="Používateľ existuje, ale heslo nesedí."), 409
+                if templates:
+                    # Účet už je chránený šablónou z iného zariadenia. Samotné heslo by stačilo na
+                    # pridanie vlastnej šablóny a obišlo by druhý faktor; preto treba kód, ktorý
+                    # vydá len zariadenie prihlásené aj biometriou.
+                    code = pair_code_digits(body.get("pair_code"))
+                    pair = consume_challenge(code, user_id, "pair") if code else None
+                    if not pair or pair["device"] != device:
+                        return jsonify(error="Na pridanie ďalšieho zariadenia treba platný párovací kód.", pair_required=True), 403
             lang = phrase_lang(user)
         else:
             lang = request_lang()
@@ -412,10 +447,12 @@ def enrollment_begin():
                 # dve súbežné požiadavky s tým istým menom (dvojité odoslanie formulára)
                 return jsonify(error="Registrácia tohto mena práve prebieha. Skús to znova."), 409
         session["enroll_user_id"] = user_id
-        token, challenge_id, phrase = make_challenge(user_id, "enrollment", lang)
-        count = len(get_enrollment_samples(user_id))
+        session["enroll_device"] = device
+        token, challenge_id, phrase = make_challenge(user_id, "enrollment", lang, device)
+        count = len(get_enrollment_samples(user_id, device))
         return jsonify(
             user_id=user_id,
+            device=device,
             challenge=token,
             challenge_id=challenge_id,
             count=count,
@@ -440,15 +477,15 @@ def enrollment_sample():
         challenge = consume_challenge(token, user_id, "enrollment")
         if not challenge:
             raise ValueError("Challenge je neplatný alebo expirovaný")
+        device = challenge["device"] or "pc"
         features = extract_features(body.get("events", []), challenge["phrase"], settings.MAX_CORRECTIONS)
         digest = feature_hash(features)
-        samples = get_enrollment_samples(user_id)
-        if any(row["feature_hash"] == digest for row in samples):
+        if any(row["feature_hash"] == digest for row in get_enrollment_samples(user_id)):
             return jsonify(error="Identická enrollment vzorka bola už použitá. Zopakuj ju."), 409
-        existing = len(samples)
+        existing = len(get_enrollment_samples(user_id, device))
         if existing >= settings.MAX_ENROLLMENT:
             return jsonify(error="Maximum enrollment vzoriek už bolo dosiahnuté."), 409
-        add_enrollment_sample(user_id, existing + 1, features, challenge["phrase"])
+        add_enrollment_sample(user_id, next_sample_index(user_id), features, challenge["phrase"], device=device)
         new_count = existing + 1
         template_ready = new_count >= settings.MIN_ENROLLMENT
         return jsonify(count=new_count, template_ready=template_ready, max_enrollment=settings.MAX_ENROLLMENT)
@@ -462,14 +499,20 @@ def enrollment_finish():
         require_csrf()
         body = json_body()
         user_id = int(body.get("user_id"))
-        samples = get_enrollment_samples(user_id)
+        device = request_device(body)
+        # šablónu dokončí len relácia, ktorá registráciu začala (prešla heslom, prípadne párovacím kódom)
+        if session.get("enroll_user_id") != user_id or session.get("enroll_device") != device:
+            return jsonify(error="Registrácia nie je rozbehnutá. Začni ju znova."), 400
+        if get_template(user_id, device):
+            return jsonify(error="Tento účet už má šablónu pre tento typ zariadenia."), 409
+        samples = get_enrollment_samples(user_id, device)
         if len(samples) < settings.MIN_ENROLLMENT:
             return jsonify(error=f"Potrebných je aspoň {settings.MIN_ENROLLMENT} vzoriek."), 400
         template = make_template(vectors_of(samples))
-        save_template(user_id, template)
-        stamp_template(user_id, 0)
+        save_template(user_id, device, template)
         session.pop("enroll_user_id", None)
-        return jsonify(ok=True, count=len(samples), threshold=template["threshold"], metric=settings.METRIC)
+        session.pop("enroll_device", None)
+        return jsonify(ok=True, count=len(samples), device=device, threshold=template["threshold"], metric=settings.METRIC)
     except (ValueError, TypeError) as exc:
         return jsonify(error=str(exc)), 400
 
@@ -480,14 +523,15 @@ def verification_begin():
         require_csrf()
         body = json_body()
         username = validate_username(body.get("username", ""))
+        device = request_device(body)
         require_human(body)
         user = get_user_by_username(username)
         verify_rate_limit(username)
-        if not user or not user["template_json"]:
-            # Rovnaká odpoveď pre neexistujúci účet aj účet bez šablóny: žiadna enumerácia.
-            # Falošný challenge sa pri overení správa ako expirovaný.
+        if not user or not get_template(int(user["id"]), device):
+            # Rovnaká odpoveď pre neexistujúci účet aj účet bez šablóny pre toto zariadenie: žiadna
+            # enumerácia. Falošný challenge sa pri overení nepoužije (pokus skončí ako neúspešný).
             return jsonify(challenge=secrets.token_urlsafe(32), challenge_id=0, phrase=next_phrase(decoy_lang(username))[0])
-        token, challenge_id, phrase = make_challenge(int(user["id"]), "verification", phrase_lang(user))
+        token, challenge_id, phrase = make_challenge(int(user["id"]), "verification", phrase_lang(user), device)
         return jsonify(challenge=token, challenge_id=challenge_id, phrase=phrase)
     except PermissionError as exc:
         return jsonify(error=str(exc)), 429
@@ -502,15 +546,17 @@ def verification():
         body = json_body()
         username = validate_username(body.get("username", ""))
         password = str(body.get("password", ""))
+        device = request_device(body)
         user = get_user_by_username(username)
-        if not user or not user["template_json"]:
-            # Neodhaľujeme, či účet existuje (ani či má nedokončenú registráciu), ale pokus auditujeme.
-            # Účet bez šablóny dostal vo verification/begin falošný challenge, takže by tu inak
+        tpl = get_template(int(user["id"]), device) if user else None
+        if not tpl:
+            # Neodhaľujeme, či účet existuje (ani či má šablónu pre toto zariadenie), ale pokus auditujeme.
+            # Taký účet dostal vo verification/begin falošný challenge, takže by tu inak
             # donekonečna končil na "neplatný challenge" a klient by si pýtal ďalšiu vetu.
             store_attempt(
                 user_id=int(user["id"]) if user else None, username=username, actor=username,
                 attempt_type="genuine", impersonated=None, score=None, threshold=None, accepted=False,
-                features=None, challenge_id=None, reason="not_enrolled" if user else "unknown_user",
+                features=None, challenge_id=None, reason="not_enrolled" if user else "unknown_user", device=device,
             )
             return jsonify(error="Autentifikácia zlyhala."), 401
         user_id = int(user["id"])
@@ -519,7 +565,7 @@ def verification():
         attempt_type, actor, impersonated, test_mode = attempt_metadata(body, username)
         token = str(body.get("challenge", ""))
         challenge = consume_challenge(token, user_id, "verification")
-        if not challenge:
+        if not challenge or (challenge["device"] or "pc") != device:
             return jsonify(error="Challenge je neplatný, použitý alebo expirovaný."), 400
 
         # Heslo je prvý faktor. Biometria je druhý faktor.
@@ -529,7 +575,7 @@ def verification():
             store_attempt(
                 user_id=user_id, username=username, actor=actor, attempt_type=attempt_type,
                 impersonated=impersonated, test_mode=test_mode, score=None, threshold=None, accepted=False,
-                features=None, challenge_id=int(challenge["id"]), reason="account_locked",
+                features=None, challenge_id=int(challenge["id"]), reason="account_locked", device=device,
             )
             if password_ok:
                 return jsonify(error="Účet je dočasne zamknutý."), 423
@@ -538,7 +584,7 @@ def verification():
             store_attempt(
                 user_id=user_id, username=username, actor=actor, attempt_type=attempt_type,
                 impersonated=impersonated, test_mode=test_mode, score=None, threshold=None, accepted=False,
-                features=None, challenge_id=int(challenge["id"]), reason="password_failed",
+                features=None, challenge_id=int(challenge["id"]), reason="password_failed", device=device,
             )
             if not test_mode or settings.ENFORCE_LOCKOUT_IN_TEST_MODE:
                 update_auth_state(user_id, False, settings.LOCKOUT_THRESHOLD, settings.LOCKOUT_SECONDS)
@@ -552,13 +598,13 @@ def verification():
                 user_id=user_id, username=username, actor=actor, attempt_type=attempt_type,
                 impersonated=impersonated, test_mode=test_mode, score=None, threshold=None, accepted=False,
                 features=features, challenge_id=int(challenge["id"]), replay=True,
-                reason="duplicate_feature_vector", phrase=phrase,
+                reason="duplicate_feature_vector", phrase=phrase, device=device,
             )
             if not test_mode or settings.ENFORCE_LOCKOUT_IN_TEST_MODE:
                 update_auth_state(user_id, False, settings.LOCKOUT_THRESHOLD, settings.LOCKOUT_SECONDS)
             return jsonify(result="ZAMIETNUTÝ", error="Detegovaný replay / identický vektor."), 401
 
-        template = current_template(user)
+        template = current_template(tpl)
         metric = settings.METRIC
         threshold = float(template["threshold"])
         score = score_vector(features, template, metric=metric)
@@ -567,7 +613,7 @@ def verification():
                 user_id=user_id, username=username, actor=actor, attempt_type=attempt_type,
                 impersonated=impersonated, test_mode=test_mode, score=None, threshold=None, accepted=False,
                 features=features, challenge_id=int(challenge["id"]), reason="insufficient_features",
-                phrase=phrase,
+                phrase=phrase, device=device,
             )
             return jsonify(error="Veta obsahovala príliš málo použiteľných kláves. Skús znova s novou vetou."), 400
 
@@ -575,7 +621,7 @@ def verification():
         store_attempt(
             user_id=user_id, username=username, actor=actor, attempt_type=attempt_type,
             impersonated=impersonated, test_mode=test_mode, score=score, threshold=threshold, accepted=accepted,
-            features=features, challenge_id=int(challenge["id"]), reason=None, phrase=phrase,
+            features=features, challenge_id=int(challenge["id"]), reason=None, phrase=phrase, device=device,
         )
 
         if not test_mode or settings.ENFORCE_LOCKOUT_IN_TEST_MODE:
@@ -590,11 +636,13 @@ def verification():
                 c if c is None or x is None else (1 - alpha) * float(c) + alpha * float(x)
                 for c, x in zip(center, features)
             ] + center[len(features):]
-            save_template(user_id, template)
+            save_template(user_id, device, template)
 
         if accepted:
             session["auth_user_id"] = user_id
             session["auth_username"] = username
+            session["auth_device"] = device
+        devices = [row["device"] for row in get_templates(user_id)]
         return jsonify(
             result="AUTENTIFIKOVANÝ" if accepted else "ZAMIETNUTÝ",
             accepted=accepted,
@@ -605,7 +653,10 @@ def verification():
             is_admin=accepted and is_admin(username),
             # overený používateľ je "pustený na internet"; admin a testovacie pokusy ostávajú v aplikácii
             redirect=settings.LOGIN_REDIRECT_URL if accepted and not test_mode and not is_admin(username) else None,
-            refresh=refresh_info(get_user(user_id)) if accepted else None,
+            refresh=refresh_info(get_template(user_id, device)) if accepted else None,
+            device=device,
+            # druhé zariadenie sa pridáva párovacím kódom, ktorý vydá len takto prihlásená relácia
+            missing_devices=[d for d in DEVICES if d not in devices] if accepted else None,
         ), (200 if accepted else 401)
     except PermissionError as exc:
         return jsonify(error=str(exc)), 429
@@ -614,7 +665,10 @@ def verification():
 
 
 def verification_report(attempts, users) -> dict:
-    thresholds = {int(row["id"]): float(json.loads(row["template_json"])["threshold"]) for row in list_templates()}
+    thresholds = {
+        (int(row["user_id"]), row["device"]): float(json.loads(row["template_json"])["threshold"])
+        for row in list_templates()
+    }
     return build_report(attempts, users, list_enrollment_features(), thresholds)
 
 
@@ -626,7 +680,8 @@ def admin_overview():
     users = []
     for row in list_users():
         item = dict(row)
-        item["refresh"] = refresh_info(get_user(int(row["id"])))
+        item["templates"] = [refresh_info(tpl) for tpl in get_templates(int(row["id"]))]
+        item["enrolled"] = bool(item["templates"])
         users.append(item)
     attempts = [dict(row) for row in list_attempts(100)]
     return jsonify(
@@ -674,7 +729,7 @@ def admin_report_csv(name: str):
 @app.get("/api/refresh/status")
 def refresh_status():
     try:
-        return jsonify(refresh_info(session_user()))
+        return jsonify(refresh_info(session_user()[1]))
     except PermissionError as exc:
         return jsonify(error=str(exc)), 401
 
@@ -683,9 +738,9 @@ def refresh_status():
 def refresh_begin():
     try:
         require_csrf()
-        user = session_user()
-        info = refresh_info(user)
-        token, challenge_id, phrase = make_challenge(int(user["id"]), "refresh", phrase_lang(user))
+        user, tpl = session_user()
+        info = refresh_info(tpl)
+        token, challenge_id, phrase = make_challenge(int(user["id"]), "refresh", phrase_lang(user), tpl["device"])
         return jsonify(challenge=token, challenge_id=challenge_id, phrase=phrase,
                        count=info["pending"], needed=info["needed"], due=info["due"])
     except PermissionError as exc:
@@ -698,21 +753,21 @@ def refresh_begin():
 def refresh_sample():
     try:
         require_csrf()
-        user = session_user()
-        user_id = int(user["id"])
+        user, tpl = session_user()
+        user_id, device = int(user["id"]), tpl["device"]
         body = json_body()
         challenge = consume_challenge(str(body.get("challenge", "")), user_id, "refresh")
-        if not challenge:
+        if not challenge or (challenge["device"] or "pc") != device:
             raise ValueError("Challenge je neplatný alebo expirovaný")
         features = extract_features(body.get("events", []), challenge["phrase"], settings.MAX_CORRECTIONS)
         digest = feature_hash(features)
-        cycle = int(user["template_cycle"] or 0) + 1
+        cycle = int(tpl["cycle"] or 0) + 1
         known = [r["feature_hash"] for r in get_enrollment_samples(user_id)] + \
-                [r["feature_hash"] for r in get_refresh_samples(user_id, cycle)]
+                [r["feature_hash"] for r in get_refresh_samples(user_id, cycle, device)]
         if digest in known:
             return jsonify(error="Identická vzorka bola už použitá. Zopakuj ju."), 409
 
-        template = current_template(user)
+        template = current_template(tpl)
         score = score_vector(features, template)
         threshold = float(template["threshold"])
         # ochrana pred otrávením šablóny: vzorka musí byť rozumne blízko aktuálnej šablóne
@@ -721,8 +776,8 @@ def refresh_sample():
                 error="Táto vzorka sa príliš líši od tvojej šablóny, preto sa nepoužila. Skús ju napísať znova.",
                 rejected=True,
             ), 422
-        add_refresh_sample(user_id, cycle, features, challenge["phrase"], score)
-        count = len(get_refresh_samples(user_id, cycle))
+        add_refresh_sample(user_id, cycle, features, challenge["phrase"], score, device)
+        count = len(get_refresh_samples(user_id, cycle, device))
         return jsonify(count=count, needed=settings.REFRESH_SAMPLES, ready=count >= settings.REFRESH_SAMPLES)
     except PermissionError as exc:
         return jsonify(error=str(exc)), 401
@@ -734,24 +789,23 @@ def refresh_sample():
 def refresh_finish():
     try:
         require_csrf()
-        user = session_user()
-        user_id = int(user["id"])
-        cycle = int(user["template_cycle"] or 0) + 1
-        pending = get_refresh_samples(user_id, cycle)
+        user, tpl = session_user()
+        user_id, device = int(user["id"]), tpl["device"]
+        cycle = int(tpl["cycle"] or 0) + 1
+        pending = get_refresh_samples(user_id, cycle, device)
         if len(pending) < settings.REFRESH_SAMPLES:
             raise ValueError(f"Potrebných je aspoň {settings.REFRESH_SAMPLES} vzoriek.")
 
-        old_template = current_template(user)
-        existing = get_enrollment_samples(user_id)
-        old_window = vectors_of(existing[-settings.MAX_ENROLLMENT:])
+        old_template = current_template(tpl)
+        old_window = vectors_of(get_enrollment_samples(user_id, device)[-settings.MAX_ENROLLMENT:])
         new_vectors = vectors_of(pending)
 
         report = analyze_drift(old_window, new_vectors, old_template)
 
         # nové vzorky sa pridajú k tým pôvodným; šablóna sa počíta z posledných MAX_ENROLLMENT
-        next_index = (int(existing[-1]["sample_index"]) if existing else 0) + 1
+        next_index = next_sample_index(user_id)
         for offset, (row, vector) in enumerate(zip(pending, new_vectors)):
-            add_enrollment_sample(user_id, next_index + offset, vector, row["phrase"], cycle)
+            add_enrollment_sample(user_id, next_index + offset, vector, row["phrase"], cycle, device)
         new_template = make_template((old_window + new_vectors)[-settings.MAX_ENROLLMENT:])
         old_threshold = float(old_template["threshold"])
         threshold, capped = decide_threshold(
@@ -760,20 +814,46 @@ def refresh_finish():
         )
         new_template["threshold"] = threshold
         new_template["threshold_capped"] = capped
-        save_template(user_id, new_template)
-        stamp_template(user_id, cycle)
-        clear_refresh_samples(user_id)
+        save_template(user_id, device, new_template)
+        stamp_template(user_id, device, cycle)
+        clear_refresh_samples(user_id, device)
 
         report.update(
             cycle=cycle, old_threshold=old_threshold, new_threshold=threshold, threshold_capped=capped,
             new_samples=len(pending), needs_reenrollment=bool(capped and report["verdict"] == "degraded"),
         )
-        insert_history({**report, "user_id": user_id, "threshold_capped": 1 if capped else 0,
+        insert_history({**report, "user_id": user_id, "device": device, "threshold_capped": 1 if capped else 0,
                         "created_at": datetime.now(timezone.utc).isoformat()})
         return jsonify(ok=True, **report)
     except PermissionError as exc:
         return jsonify(error=str(exc)), 401
     except (ValueError, TypeError) as exc:
+        return jsonify(error=str(exc)), 400
+
+
+# ---------- druhé zariadenie ----------
+
+@app.post("/api/devices/pair")
+def devices_pair():
+    """Jednorazový kód na pridanie šablóny pre druhý typ zariadenia. Vydá ho len relácia
+    prihlásená heslom aj biometriou; na druhom zariadení sa zadá pri registrácii."""
+    try:
+        require_csrf()
+        user, _tpl = session_user()
+        user_id = int(user["id"])
+        have = {row["device"] for row in get_templates(user_id)}
+        body = json_body()
+        missing = [d for d in DEVICES if d not in have]
+        device = str(body.get("device") or (missing[0] if missing else ""))
+        if device not in missing:
+            return jsonify(error="Šablóna pre toto zariadenie už existuje."), 409
+        code = "".join(secrets.choice(PAIR_ALPHABET) for _ in range(PAIR_CODE_LENGTH))
+        create_challenge(user_id, "pair", code, PAIR_TTL_SECONDS, None, device)
+        half = PAIR_CODE_LENGTH // 2
+        return jsonify(code=f"{code[:half]}-{code[half:]}", device=device, expires_in=PAIR_TTL_SECONDS)
+    except PermissionError as exc:
+        return jsonify(error=str(exc)), 401
+    except ValueError as exc:
         return jsonify(error=str(exc)), 400
 
 

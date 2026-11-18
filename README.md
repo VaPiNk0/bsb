@@ -156,7 +156,7 @@ Berie sa rozhodnutie, ktoré systém pri pokuse naozaj urobil (uložené skóre 
 
 - **Malý dataset:** EER/FAR/FRR budú mať vysokú neistotu; jeden chybný pokus môže výrazne zmeniť percentá.
 - **Keyboard/device dependence:** dwell a flight times závisia od typu klávesnice, OS, browsera, latencie a fyzických návykov.
-- **Telefón:** stránka funguje aj na mobile. Plochu na písanie prekrýva neviditeľné textové pole, takže ťuknutie otvorí dotykovú klávesnicu. Android (Gboard) v `keydown` znak neprezradí (`Unidentified`), preto sa znaky čítajú z udalosti `input` a majú `down = up`: dwell je nulový a meria sa len rytmus medzi písmenami (DD/UD). iOS a pripojená klávesnica posielajú bežné `keydown`/`keyup`. Šablóna z telefónu sa preto hodí len na prihlásenie z toho istého zariadenia.
+- **Telefón:** stránka funguje aj na mobile. Plochu na písanie prekrýva neviditeľné textové pole, takže ťuknutie otvorí dotykovú klávesnicu. Android (Gboard) v `keydown` znak neprezradí (`Unidentified`), preto sa znaky čítajú z udalosti `input` a majú `down = up`: dwell je nulový a meria sa len rytmus medzi písmenami (DD/UD). iOS a pripojená klávesnica posielajú bežné `keydown`/`keyup`. Preto má účet pre telefón vlastnú šablónu (pozri nižšie).
 - **Session/time drift:** únava, stres alebo zmena pracovného prostredia menia rytmus.
 - **Text-dependent → free-ish text:** meniaca sa veta zvyšuje variabilitu (rôzne bigramy v každom pokuse), takže EER bude pravdepodobne horší než pri jednej pevnej vete. Je to cena za to, že sa veta nedá naučiť naspamäť ani zachytiť a prehrať.
 - **Challenge/replay:** detekcia identického vektora nie je plnohodnotná anti-replay kryptografia.
@@ -185,6 +185,17 @@ pytest -q
 - **Presnejšie rozpoznanie** (verzia šablóny 4): 11 nových príznakov rozloženia časov, stabilnejší prah; kovariancia sa ukladá len pre Mahalanobis (šablóna má ~2 kB namiesto ~90 kB).
 - **Robustnejšie skórovanie** (verzia šablóny 3): shrinkage škály, orezanie |z|. Staršie šablóny sa pri najbližšom prihlásení automaticky prepočítajú z uložených enrollment vzoriek.
 - **Nový frontend**: živý graf rytmu písania (dwell/DD pre každú klávesu), segmentovaný postup registrácie, ukazovateľ skóre voči prahu a v admin paneli graf skóre/prah všetkých pokusov.
+
+## Počítač a telefón: dve šablóny jedného účtu
+
+Na telefóne píše človek inak (palcami, iné tempo) a dotyková klávesnica nehlási držanie klávesy, takže šablóna z počítača na telefón nesedí a naopak. Účet preto má **pre každý typ zariadenia vlastnú šablónu** (tabuľka `templates`, kľúč `(user_id, device)`, `device` je `pc` alebo `mobile`). Registračné vzorky, pokusy, mesačná obnova aj história majú stĺpec `device`, takže sa nemiešajú.
+
+- **Typ zariadenia** určí prehliadač: zariadenie, ktorého hlavným vstupom je dotyk (`(hover: none) and (pointer: coarse)`), je telefón. Posiela sa pri registrácii aj prihlásení a server si ho uloží k challenge, takže veta a zariadenie k sebe patria. Podvrhnutím údaja si útočník vyberie len to, s ktorou zo šablón účtu ho porovnáme.
+- **Prihlásenie** sa porovná so šablónou zariadenia, z ktorého prichádza. Ak účet pre to zariadenie šablónu nemá, odpoveď je rovnaká ako pri neznámom účte (žiadna enumerácia).
+- **Pridanie druhého zariadenia** vyžaduje heslo **a jednorazový párovací kód**. Kód vydá (`POST /api/devices/pair`) len relácia prihlásená heslom aj biometriou; platí 10 minút a dá sa použiť raz. Samotné heslo nestačí: kto by poznal len heslo, pridal by si vlastnú šablónu a obišiel by druhý faktor.
+- **Postup pre používateľa:** zaregistruj sa na prvom zariadení, prihlás sa na ňom, v ponuke „Pridať telefón / počítač“ vytvor kód. Na druhom zariadení na karte Registrácia zadaj rovnaké meno a heslo; stránka si vypýta kód a potom prepíšeš registračné vety.
+- **Admin panel a výsledky** sú zvlášť pre každé zariadenie (FRR/FAR na účet × zariadenie), `evaluate.py` kalibruje šablónu pre každú dvojicu účet × zariadenie.
+- **Staršia databáza:** šablóna uložená kedysi v `users.template_json` sa pri štarte presunie do `templates` ako šablóna počítača.
 
 ## Generátor viet a lokálny LLM
 

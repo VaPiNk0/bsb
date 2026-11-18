@@ -71,7 +71,11 @@ klávesnica nehlási dĺžku držania klávesy, preto sa registruj aj prihlasuj 
    „Dokončiť registráciu“.
 2. **Prihlásenie:** zadaj meno a heslo a prepíš jednu vetu. Po poslednom znaku sa pokus vyhodnotí sám
    (skóre voči prahu). Pri zamietnutí príde nová veta.
-3. **Admin panel** (`/admin`): audit log pokusov, výsledky FAR/FRR/EER, export CSV. Lokálne ho vidí každý
+3. **Druhé zariadenie (telefón alebo počítač):** každé má vlastnú šablónu, lebo sa na ňom píše inak.
+   Po prihlásení na prvom zariadení stránka ponúkne „Pridať telefón“ (alebo počítač) a vytvorí
+   jednorazový kód (platí 10 minút). Na druhom zariadení na karte Registrácia zadaj rovnaké meno
+   a heslo, potom tento kód, a prepíš registračné vety. Odvtedy sa prihlasuješ z oboch.
+4. **Admin panel** (`/admin`): audit log pokusov, výsledky FAR/FRR/EER, export CSV. Lokálne ho vidí každý
    prihlásený používateľ; vo verejnom nasadení len účty v premennej `ADMIN_USERS`.
 
 ## Užitočné nastavenia (premenné prostredia)

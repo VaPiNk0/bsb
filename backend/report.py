@@ -82,28 +82,62 @@ def _scenario(name: str, rows: list[Any]) -> dict[str, Any]:
     }
 
 
-def typing_profiles(samples: list[Any]) -> dict[int, dict[str, Any]]:
-    """Profil písania účtu z enrollment vzoriek: medián cez vety z mediánov dwell a DD vo vete."""
-    by_user: dict[int, list[list[float | None]]] = {}
+def device_of(row: Any) -> str:
+    """Typ zariadenia riadku; záznamy spred rozdelenia šablón vznikli na počítači."""
+    try:
+        return row["device"] or "pc"
+    except (KeyError, IndexError):
+        return "pc"
+
+
+def typing_profiles(samples: list[Any]) -> dict[tuple[int, str], dict[str, Any]]:
+    """Profil písania účtu na jednom type zariadenia z enrollment vzoriek: medián cez vety
+    z mediánov dwell a DD vo vete."""
+    by_user: dict[tuple[int, str], list[list[float | None]]] = {}
     for row in samples:
-        by_user.setdefault(int(row["user_id"]), []).append(json.loads(row["features_json"]))
+        by_user.setdefault((int(row["user_id"]), device_of(row)), []).append(json.loads(row["features_json"]))
 
     def column(vectors: list[list[float | None]], index: int) -> list[float]:
         return [float(v[index]) for v in vectors if index < len(v) and v[index] is not None]
 
     return {
-        user_id: {
+        key: {
             "enrollment_n": len(vectors),
             "median_dwell_ms": _median(column(vectors, DWELL_INDEX)),
             "median_dd_ms": _median(column(vectors, DD_INDEX)),
         }
-        for user_id, vectors in by_user.items()
+        for key, vectors in by_user.items()
+    }
+
+
+def _user_row(user, device, genuine, attacks, profiles, thresholds) -> dict[str, Any]:
+    user_id = int(user["id"])
+    own = [r for r in genuine if r["user_id"] == user_id and device_of(r) == device]
+    against = [r for r in attacks if r["user_id"] == user_id and device_of(r) == device]
+    profile = profiles.get((user_id, device), {})
+    frr = error_rate(sum(1 for r in own if not r["accepted"]), len(own))
+    far = error_rate(sum(1 for r in against if r["accepted"]), len(against))
+    return {
+        "username": user["username"],
+        "device": device,
+        "enrollment_n": profile.get("enrollment_n", 0),
+        "median_dwell_ms": profile.get("median_dwell_ms"),
+        "median_dd_ms": profile.get("median_dd_ms"),
+        "threshold": thresholds.get((user_id, device)),
+        "genuine_n": frr["n"], "genuine_rejected": frr["errors"], "frr": frr["rate"],
+        "frr_ci_low": frr["ci_low"], "frr_ci_high": frr["ci_high"],
+        "attack_n": far["n"], "attack_accepted": far["errors"], "far": far["rate"],
+        "far_ci_low": far["ci_low"], "far_ci_high": far["ci_high"],
+        "genuine_median_ratio": _median(_ratios(own)),
+        "attack_median_ratio": _median(_ratios(against)),
     }
 
 
 def build_report(
-    attempts: list[Any], users: list[Any], samples: list[Any], thresholds: dict[int, float]
+    attempts: list[Any], users: list[Any], samples: list[Any], thresholds: dict[tuple[int, str], float]
 ) -> dict[str, Any]:
+    """`thresholds` je prah šablóny podľa (id účtu, zariadenie). Výsledky podľa účtu sú zvlášť
+    pre každé zariadenie, lebo každé má vlastnú šablónu a iný rytmus písania."""
     scored = [r for r in attempts if _scored(r)]
     genuine = [r for r in scored if r["attempt_type"] == GENUINE]
     attacks = [r for r in scored if r["attempt_type"] in ATTACKS]
@@ -116,24 +150,10 @@ def build_report(
     per_user = []
     for user in users:
         user_id = int(user["id"])
-        own = [r for r in genuine if r["user_id"] == user_id]
-        against = [r for r in attacks if r["user_id"] == user_id]
-        profile = profiles.get(user_id, {})
-        frr = error_rate(sum(1 for r in own if not r["accepted"]), len(own))
-        far = error_rate(sum(1 for r in against if r["accepted"]), len(against))
-        per_user.append({
-            "username": user["username"],
-            "enrollment_n": profile.get("enrollment_n", 0),
-            "median_dwell_ms": profile.get("median_dwell_ms"),
-            "median_dd_ms": profile.get("median_dd_ms"),
-            "threshold": thresholds.get(user_id),
-            "genuine_n": frr["n"], "genuine_rejected": frr["errors"], "frr": frr["rate"],
-            "frr_ci_low": frr["ci_low"], "frr_ci_high": frr["ci_high"],
-            "attack_n": far["n"], "attack_accepted": far["errors"], "far": far["rate"],
-            "far_ci_low": far["ci_low"], "far_ci_high": far["ci_high"],
-            "genuine_median_ratio": _median(_ratios(own)),
-            "attack_median_ratio": _median(_ratios(against)),
-        })
+        used = {d for (uid, d) in list(profiles) + list(thresholds) if uid == user_id}
+        used |= {device_of(r) for r in scored if r["user_id"] == user_id}
+        for device in sorted(used) or ["pc"]:
+            per_user.append(_user_row(user, device, genuine, attacks, profiles, thresholds))
 
     excluded: dict[str, int] = {}
     for row in attempts:
@@ -159,12 +179,12 @@ SCENARIO_COLUMNS = [
     "scenario", "measure", "n", "accepted", "rejected", "errors", "rate", "ci_low", "ci_high", "median_ratio",
 ]
 USER_COLUMNS = [
-    "username", "enrollment_n", "median_dwell_ms", "median_dd_ms", "threshold",
+    "username", "device", "enrollment_n", "median_dwell_ms", "median_dd_ms", "threshold",
     "genuine_n", "genuine_rejected", "frr", "frr_ci_low", "frr_ci_high",
     "attack_n", "attack_accepted", "far", "far_ci_low", "far_ci_high",
     "genuine_median_ratio", "attack_median_ratio",
 ]
 ATTEMPT_COLUMNS = [
-    "id", "created_at", "username", "actor_label", "attempt_type", "test_mode",
+    "id", "created_at", "username", "device", "actor_label", "attempt_type", "test_mode",
     "score", "threshold", "accepted", "replay_detected", "reason",
 ]

@@ -295,6 +295,9 @@ a.secondary, .age-btn, .topbar .secondary { padding: 7px 14px; font-size: 14px; 
 .refresh-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; flex-wrap: wrap; }
 .refresh-head p { max-width: 58ch; }
 .refresh-card .capture-box { margin-top: 20px; }
+.pair-code { display: block; margin: 18px 0 6px; font-family: var(--font-type); font-size: clamp(28px, 7vw, 36px); letter-spacing: .12em; color: var(--blue); }
+.device-line { margin: -6px 0 20px; font-size: 15px; color: var(--ink-faint); }
+.device-line strong { color: var(--ink); font-weight: 600; }
 .report { margin-top: 20px; padding: 20px; border-radius: 3px; background: var(--sheet); border: 1px solid var(--rule); }
 .report-head { display: flex; align-items: center; gap: 12px; font-weight: 600; font-size: 18px; margin-bottom: 4px; }
 .report .result-metrics { margin: 16px 0 0; }

@@ -39,10 +39,10 @@
 
     <section class="panel">
       <div class="panel-header">
-        <div><h2 data-en="Results by account">Výsledky podľa účtu</h2><p data-en="Typing profile from the sign-up sentences and the error rate on each account. In brackets: errors / attempts.">Profil písania z registračných viet a chybovosť na každom účte. V zátvorke chyby / pokusy.</p></div>
+        <div><h2 data-en="Results by account">Výsledky podľa účtu</h2><p data-en="Typing profile from the sign-up sentences and the error rate on each account, separately for computer and phone (each has its own template). In brackets: errors / attempts.">Profil písania z registračných viet a chybovosť na každom účte, zvlášť pre počítač a telefón (každé má vlastnú šablónu). V zátvorke chyby / pokusy.</p></div>
         <div class="form-actions"><a class="secondary" href="/api/admin/report/users.csv" data-en="CSV accounts">CSV účty</a></div>
       </div>
-      <div class="table-wrap"><table><thead><tr><th data-en="Account">Účet</th><th data-en="Samples">Vzorky</th><th data-en="Median dwell">Medián dwell</th><th data-en="Median DD">Medián DD</th><th data-en="Threshold">Prah</th><th>FRR</th><th>FAR</th><th data-en="Score / threshold genuine">Skóre / prah genuine</th><th data-en="Score / threshold attack">Skóre / prah útok</th></tr></thead><tbody id="userResultsTable"></tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th data-en="Account">Účet</th><th data-en="Device">Zariadenie</th><th data-en="Samples">Vzorky</th><th data-en="Median dwell">Medián dwell</th><th data-en="Median DD">Medián DD</th><th data-en="Threshold">Prah</th><th>FRR</th><th>FAR</th><th data-en="Score / threshold genuine">Skóre / prah genuine</th><th data-en="Score / threshold attack">Skóre / prah útok</th></tr></thead><tbody id="userResultsTable"></tbody></table></div>
     </section>
 
     <section class="panel">
@@ -59,7 +59,7 @@
 
     <section class="panel">
       <div class="panel-header"><h2>Audit log</h2></div>
-      <div class="table-wrap"><table><thead><tr><th data-en="Time">Čas</th><th data-en="Account">Účet</th><th>Tester</th><th data-en="Type">Typ</th><th data-en="Score">Skóre</th><th data-en="Threshold">Prah</th><th data-en="Result">Výsledok</th><th data-en="Reason">Dôvod</th></tr></thead><tbody id="attemptsTable"></tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th data-en="Time">Čas</th><th data-en="Account">Účet</th><th data-en="Device">Zariadenie</th><th>Tester</th><th data-en="Type">Typ</th><th data-en="Score">Skóre</th><th data-en="Threshold">Prah</th><th data-en="Result">Výsledok</th><th data-en="Reason">Dôvod</th></tr></thead><tbody id="attemptsTable"></tbody></table></div>
     </section>
   </main>
   <script src="/static/admin.js" defer></script>

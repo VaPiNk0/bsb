@@ -42,6 +42,7 @@
       <button class="tab active" data-tab="enrollment" data-en="Sign up">Registrácia</button>
       <button class="tab" data-tab="verification" data-en="Log in">Prihlásenie</button>
     </nav>
+    <p class="device-line" id="deviceLine"></p>
 
     <section class="panel tab-panel active" id="enrollmentPanel">
       <div class="panel-header">
@@ -70,6 +71,10 @@
           <select id="enrollTarget">
             <option value="12">12</option>
           </select>
+        </label>
+        <label class="full" id="pairField" hidden>
+          <span data-en="Pairing code from your other device">Párovací kód z druhého zariadenia</span>
+          <input id="enrollPairCode" maxlength="16" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABCD-EFGH">
         </label>
         <div class="full" id="enrollTurnstile" hidden></div>
         <div class="form-actions full">
@@ -202,6 +207,25 @@
           </div>
         </div>
         <div class="message" id="refreshMessage"></div>
+      </div>
+
+      <div id="pairCard" class="refresh-card" hidden>
+        <div class="refresh-head">
+          <div>
+            <h3 id="pairTitle">—</h3>
+            <p id="pairText">—</p>
+          </div>
+          <div class="form-actions" id="pairActions">
+            <button class="primary" id="pairStart" type="button" data-en="Create a code">Vytvoriť kód</button>
+            <button class="secondary" id="pairLater" type="button" data-en="Not now">Teraz nie</button>
+          </div>
+        </div>
+        <div id="pairResult" hidden>
+          <strong class="pair-code" id="pairCode">—</strong>
+          <p id="pairHelp">—</p>
+          <div class="form-actions"><button class="primary" id="pairDone" type="button" data-en="Done">Hotovo</button></div>
+        </div>
+        <div class="message" id="pairMessage"></div>
       </div>
 
     </section>

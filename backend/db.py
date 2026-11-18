@@ -25,7 +25,10 @@ def parse_iso(value: str) -> datetime:
 
 
 IS_POSTGRES = bool(settings.DATABASE_URL)
-TABLES = ["users", "enrollment_samples", "challenges", "auth_attempts", "refresh_samples", "template_history"]
+TABLES = ["users", "templates", "enrollment_samples", "challenges", "auth_attempts", "refresh_samples", "template_history"]
+# Na telefóne a na počítači píše človek inak (dotyková klávesnica nehlási ani držanie klávesy),
+# preto má účet pre každý typ zariadenia vlastnú šablónu.
+DEVICES = ("pc", "mobile")
 _pool = None
 
 if IS_POSTGRES:
@@ -112,6 +115,15 @@ def init_db() -> None:
                 lock_until TEXT,
                 phrase_lang TEXT,
                 created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS templates (
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                device TEXT NOT NULL,
+                template_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                cycle INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, device)
             );
 
             CREATE TABLE IF NOT EXISTS enrollment_samples (
@@ -202,16 +214,25 @@ def init_db() -> None:
                 conn.execute(statement)
         # migrácia starších databáz: doplní stĺpec phrase (staré pevné-vetové vektory ale už nesedia)
         migrations = {
-            "enrollment_samples": [("phrase", "TEXT"), ("cycle", "INTEGER NOT NULL DEFAULT 0")],
-            "challenges": [("phrase", "TEXT")],
-            "auth_attempts": [("phrase", "TEXT"), ("test_mode", "INTEGER")],
+            "enrollment_samples": [("phrase", "TEXT"), ("cycle", "INTEGER NOT NULL DEFAULT 0"), ("device", "TEXT NOT NULL DEFAULT 'pc'")],
+            "challenges": [("phrase", "TEXT"), ("device", "TEXT")],
+            "auth_attempts": [("phrase", "TEXT"), ("test_mode", "INTEGER"), ("device", "TEXT")],
             "users": [("template_updated_at", "TEXT"), ("template_cycle", "INTEGER NOT NULL DEFAULT 0"), ("phrase_lang", "TEXT")],
+            "refresh_samples": [("device", "TEXT NOT NULL DEFAULT 'pc'")],
+            "template_history": [("device", "TEXT NOT NULL DEFAULT 'pc'")],
         }
         for table, wanted in migrations.items():
             columns = _columns(conn, table)
             for name, ddl in wanted:
                 if name not in columns:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+        # Šablóna bola kedysi priamo v users (jedna na účet, vznikla na počítači): presunie sa do templates.
+        conn.execute(
+            "INSERT INTO templates (user_id, device, template_json, updated_at, cycle) "
+            "SELECT id, 'pc', template_json, COALESCE(template_updated_at, created_at), COALESCE(template_cycle, 0) "
+            "FROM users WHERE template_json IS NOT NULL"
+        )
+        conn.execute("UPDATE users SET template_json = NULL WHERE template_json IS NOT NULL")
         if IS_POSTGRES:
             # Supabase vystavuje schému public cez REST API s verejným anon kľúčom. Zapnuté RLS
             # bez politík tam všetko zakáže; backend sa pripája ako vlastník tabuliek a RLS sa ho netýka.
@@ -244,42 +265,76 @@ def create_user(username: str, password_hash: str, phrase_lang: str | None = Non
 
 
 def add_enrollment_sample(
-    user_id: int, sample_index: int, features: list[float | None], phrase: str | None = None, cycle: int = 0
+    user_id: int, sample_index: int, features: list[float | None], phrase: str | None = None, cycle: int = 0,
+    device: str = "pc",
 ) -> int:
     digest = feature_hash(features)
     with _connect() as conn:
         return _insert(
             conn,
             "INSERT INTO enrollment_samples "
-            "(user_id, sample_index, features_json, feature_hash, phrase, cycle, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (user_id, sample_index, json.dumps(features), digest, phrase, cycle, now_iso()),
+            "(user_id, sample_index, features_json, feature_hash, phrase, cycle, device, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (user_id, sample_index, json.dumps(features), digest, phrase, cycle, device, now_iso()),
         )
 
 
-def get_enrollment_samples(user_id: int) -> list[Any]:
+def get_enrollment_samples(user_id: int, device: str | None = None) -> list[Any]:
+    """Vzorky účtu, s `device` len z daného typu zariadenia."""
     with _connect() as conn:
+        if device is None:
+            return conn.execute(
+                "SELECT * FROM enrollment_samples WHERE user_id = ? ORDER BY sample_index ASC", (user_id,)
+            ).fetchall()
         return conn.execute(
-            "SELECT * FROM enrollment_samples WHERE user_id = ? ORDER BY sample_index ASC", (user_id,)
+            "SELECT * FROM enrollment_samples WHERE user_id = ? AND device = ? ORDER BY sample_index ASC",
+            (user_id, device),
         ).fetchall()
 
 
-def save_template(user_id: int, template: dict[str, Any]) -> None:
+def next_sample_index(user_id: int) -> int:
+    """Poradie vzorky je spoločné pre všetky zariadenia účtu (tabuľka má UNIQUE(user_id, sample_index))."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(MAX(sample_index), 0) AS n FROM enrollment_samples WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        return int(row["n"]) + 1
+
+
+def get_template(user_id: int, device: str) -> Any | None:
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT * FROM templates WHERE user_id = ? AND device = ?", (user_id, device)
+        ).fetchone()
+
+
+def get_templates(user_id: int) -> list[Any]:
+    with _connect() as conn:
+        return conn.execute("SELECT * FROM templates WHERE user_id = ? ORDER BY device", (user_id,)).fetchall()
+
+
+def save_template(user_id: int, device: str, template: dict[str, Any]) -> None:
+    """Uloží šablónu; nová dostane čas vzniku a cyklus 0, existujúca si ich ponechá."""
     with _connect() as conn:
         conn.execute(
-            "UPDATE users SET template_json = ? WHERE id = ?",
-            (json.dumps(template, separators=(",", ":")), user_id),
+            "INSERT INTO templates (user_id, device, template_json, updated_at, cycle) VALUES (?, ?, ?, ?, 0) "
+            "ON CONFLICT (user_id, device) DO UPDATE SET template_json = excluded.template_json",
+            (user_id, device, json.dumps(template, separators=(",", ":")), now_iso()),
         )
 
 
-def create_challenge(user_id: int, purpose: str, token: str, ttl_seconds: int, phrase: str | None = None) -> int:
+def create_challenge(
+    user_id: int, purpose: str, token: str, ttl_seconds: int, phrase: str | None = None, device: str | None = None
+) -> int:
     digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
     created = datetime.now(timezone.utc)
     expires = created + timedelta(seconds=ttl_seconds)
     with _connect() as conn:
         return _insert(
             conn,
-            "INSERT INTO challenges (token_hash, user_id, purpose, phrase, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (digest, user_id, purpose, phrase, expires.isoformat(), created.isoformat()),
+            "INSERT INTO challenges (token_hash, user_id, purpose, phrase, device, expires_at, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (digest, user_id, purpose, phrase, device, expires.isoformat(), created.isoformat()),
         )
 
 
@@ -322,7 +377,7 @@ def insert_attempt(data: dict[str, Any]) -> int:
     columns = [
         "user_id", "username", "actor_label", "attempt_type", "impersonated_username",
         "score", "threshold", "accepted", "feature_json", "feature_hash", "phrase", "challenge_id",
-        "replay_detected", "reason", "ip", "test_mode", "created_at",
+        "replay_detected", "reason", "ip", "test_mode", "device", "created_at",
     ]
     values = [data.get(column) for column in columns]
     with _connect() as conn:
@@ -355,9 +410,8 @@ def update_auth_state(user_id: int, accepted: bool, lock_threshold: int, lock_se
 def list_users() -> list[Any]:
     with _connect() as conn:
         return conn.execute(
-            "SELECT id, username, failed_count, lock_until, created_at, template_updated_at, template_cycle, "
-            "(SELECT COUNT(*) FROM enrollment_samples e WHERE e.user_id = users.id) AS enrollment_count, "
-            "CASE WHEN template_json IS NULL THEN 0 ELSE 1 END AS enrolled "
+            "SELECT id, username, failed_count, lock_until, created_at, "
+            "(SELECT COUNT(*) FROM enrollment_samples e WHERE e.user_id = users.id) AS enrollment_count "
             "FROM users ORDER BY username"
         ).fetchall()
 
@@ -366,7 +420,7 @@ def list_attempts(limit: int = 100) -> list[Any]:
     with _connect() as conn:
         return conn.execute(
             "SELECT id, username, actor_label, attempt_type, impersonated_username, score, threshold, phrase, "
-            "accepted, replay_detected, reason, ip, created_at FROM auth_attempts "
+            "accepted, replay_detected, reason, ip, device, created_at FROM auth_attempts "
             "ORDER BY id DESC LIMIT ?",
             (int(limit),),
         ).fetchall()
@@ -377,70 +431,70 @@ def list_report_attempts() -> list[Any]:
     with _connect() as conn:
         return conn.execute(
             "SELECT id, created_at, user_id, username, actor_label, attempt_type, test_mode, score, threshold, "
-            "accepted, replay_detected, reason FROM auth_attempts ORDER BY id ASC"
+            "accepted, replay_detected, reason, device FROM auth_attempts ORDER BY id ASC"
         ).fetchall()
 
 
 def list_templates() -> list[Any]:
     with _connect() as conn:
-        return conn.execute("SELECT id, template_json FROM users WHERE template_json IS NOT NULL").fetchall()
+        return conn.execute("SELECT * FROM templates ORDER BY user_id, device").fetchall()
 
 
 def list_enrollment_features() -> list[Any]:
     with _connect() as conn:
-        return conn.execute("SELECT user_id, features_json FROM enrollment_samples").fetchall()
+        return conn.execute("SELECT user_id, device, features_json FROM enrollment_samples").fetchall()
 
 
 # ---------- mesačná obnova šablóny ----------
 
-def stamp_template(user_id: int, cycle: int) -> None:
+def stamp_template(user_id: int, device: str, cycle: int) -> None:
     with _connect() as conn:
         conn.execute(
-            "UPDATE users SET template_updated_at = ?, template_cycle = ? WHERE id = ?",
-            (now_iso(), cycle, user_id),
+            "UPDATE templates SET updated_at = ?, cycle = ? WHERE user_id = ? AND device = ?",
+            (now_iso(), cycle, user_id, device),
         )
 
 
 def age_template(user_id: int, days: int) -> None:
-    """Len pre demo/test: posunie čas poslednej obnovy do minulosti."""
-    user = get_user(user_id)
-    if not user:
-        return
-    base = parse_iso(user["template_updated_at"] or user["created_at"])
-    with _connect() as conn:
-        conn.execute(
-            "UPDATE users SET template_updated_at = ? WHERE id = ?",
-            ((base - timedelta(days=days)).isoformat(), user_id),
-        )
+    """Len pre demo/test: posunie čas poslednej obnovy všetkých šablón účtu do minulosti."""
+    for row in get_templates(user_id):
+        with _connect() as conn:
+            conn.execute(
+                "UPDATE templates SET updated_at = ? WHERE user_id = ? AND device = ?",
+                ((parse_iso(row["updated_at"]) - timedelta(days=days)).isoformat(), user_id, row["device"]),
+            )
 
 
-def add_refresh_sample(user_id: int, cycle: int, features: list[float | None], phrase: str, score: float) -> int:
+def add_refresh_sample(
+    user_id: int, cycle: int, features: list[float | None], phrase: str, score: float, device: str = "pc"
+) -> int:
     with _connect() as conn:
         return _insert(
             conn,
-            "INSERT INTO refresh_samples (user_id, cycle, features_json, feature_hash, phrase, score, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (user_id, cycle, json.dumps(features), feature_hash(features), phrase, score, now_iso()),
+            "INSERT INTO refresh_samples (user_id, cycle, features_json, feature_hash, phrase, score, device, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (user_id, cycle, json.dumps(features), feature_hash(features), phrase, score, device, now_iso()),
         )
 
 
-def get_refresh_samples(user_id: int, cycle: int) -> list[Any]:
+def get_refresh_samples(user_id: int, cycle: int, device: str = "pc") -> list[Any]:
     with _connect() as conn:
         return conn.execute(
-            "SELECT * FROM refresh_samples WHERE user_id = ? AND cycle = ? ORDER BY id ASC", (user_id, cycle)
+            "SELECT * FROM refresh_samples WHERE user_id = ? AND cycle = ? AND device = ? ORDER BY id ASC",
+            (user_id, cycle, device),
         ).fetchall()
 
 
-def clear_refresh_samples(user_id: int) -> None:
+def clear_refresh_samples(user_id: int, device: str = "pc") -> None:
     with _connect() as conn:
-        conn.execute("DELETE FROM refresh_samples WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM refresh_samples WHERE user_id = ? AND device = ?", (user_id, device))
 
 
 def insert_history(data: dict[str, Any]) -> int:
     columns = [
         "user_id", "cycle", "verdict", "speed_change_pct", "consistency_change_pct", "shift_ratio",
         "median_dd_old", "median_dd_new", "old_threshold", "new_threshold", "threshold_capped",
-        "new_samples", "created_at",
+        "new_samples", "device", "created_at",
     ]
     with _connect() as conn:
         return _insert(

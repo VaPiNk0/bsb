@@ -34,10 +34,16 @@ def load_data(db_path: str):
     return users, samples, attempts
 
 
+def profile_key(row):
+    """Šablóna patrí účtu a typu zariadenia (počítač / telefón); staršie DB stĺpec device nemajú."""
+    device = row["device"] if "device" in row.keys() else None
+    return int(row["user_id"]), device or "pc"
+
+
 def vectors_by_user(samples):
     result = {}
     for row in samples:
-        result.setdefault(int(row["user_id"]), []).append(json.loads(row["features_json"]))
+        result.setdefault(profile_key(row), []).append(json.loads(row["features_json"]))
     return result
 
 
@@ -45,7 +51,7 @@ def attempts_to_matrix(attempts):
     rows = []
     for row in attempts:
         rows.append({
-            "user_id": int(row["user_id"]),
+            "user_id": profile_key(row),
             "username": row["username"],
             "attempt_type": row["attempt_type"],
             "actor_label": row["actor_label"],
@@ -220,16 +226,14 @@ def main():
                 })
 
             # Per-user EER.
-            for user in users:
-                uid = int(user["id"])
-                user_scored = [(s, l) for s, l, _, u in scored if u == uid]
-                if not user_scored:
-                    continue
+            usernames = {int(user["id"]): user["username"] for user in users}
+            for uid, device in sorted({u for _, _, _, u in scored}):
+                user_scored = [(s, l) for s, l, _, u in scored if u == (uid, device)]
                 s_arr = np.asarray([x[0] for x in user_scored])
                 l_arr = np.asarray([x[1] for x in user_scored])
                 ue, _ = eer_from_scores(s_arr, l_arr)
                 per_user_rows.append({
-                    "username": user["username"], "user_id": uid, "metric": metric,
+                    "username": usernames.get(uid, str(uid)), "user_id": uid, "device": device, "metric": metric,
                     "enrollment_n": n, "EER": ue,
                     "n_genuine": int(np.sum(l_arr == 1)), "n_impostor": int(np.sum(l_arr == 0)),
                 })
@@ -310,7 +314,7 @@ def main():
               ["metric", "enrollment_n", "scenario", "EER", "n_genuine", "n_attack"],
               scenario_rows)
     write_csv(out / "eer_per_user.csv",
-              ["username", "user_id", "metric", "enrollment_n", "EER", "n_genuine", "n_impostor"],
+              ["username", "user_id", "device", "metric", "enrollment_n", "EER", "n_genuine", "n_impostor"],
               per_user_rows)
     write_csv(out / "operating_points.csv",
               ["metric", "enrollment_n", "target_FAR", "k", "empirical_FAR", "FRR"],

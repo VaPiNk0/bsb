@@ -7,6 +7,11 @@ const TAPE_MIN_MS = 8000;      // najkratší úsek, ktorý páska ukáže; dlh�
 
 const $ = (id) => document.getElementById(id);
 
+// Počítač a telefón majú každý vlastnú šablónu (na telefóne sa píše inak a dotyková klávesnica
+// nehlási ani držanie klávesy). Zariadenie s dotykom ako hlavným vstupom berieme ako telefón.
+const DEVICE = matchMedia("(hover: none) and (pointer: coarse)").matches ? "mobile" : "pc";
+const DEVICE_NAMES = { pc: t("počítač", "computer"), mobile: t("telefón", "phone") };
+
 // Páska: každé stlačenie je značka, ktorej dĺžka je držanie klávesy a poloha čas stlačenia.
 // Značky sa striedajú v dvoch riadkoch, takže je vidno aj prekryv dvoch kláves.
 // `replay` ich nechá objaviť sa v čase, v akom boli stlačené.
@@ -506,6 +511,8 @@ async function fetchEnrollPhrase() {
     username: enrollState.username,
     password: enrollState.password,
     password_confirm: enrollState.passwordConfirm,
+    device: DEVICE,
+    pair_code: enrollState.pairCode,
     turnstile: turnstileToken("enroll"),
   });
   enrollState.userId = data.user_id;
@@ -534,17 +541,27 @@ async function startEnrollment() {
     username: $("enrollUsername").value.trim(),
     password: $("enrollPassword").value,
     passwordConfirm: $("enrollPasswordConfirm").value,
+    pairCode: $("enrollPairCode").value.trim(),
     target: Math.min(Math.max(target, BOOT.min_enrollment), BOOT.max_enrollment),
     count: 0,
   };
   try {
     const phrase = await fetchEnrollPhrase();   // overí meno/heslo skôr, než prepneme obrazovku
-    $("enrollActiveUser").textContent = enrollState.username;
+    $("enrollActiveUser").textContent = `${enrollState.username} (${DEVICE_NAMES[DEVICE]})`;
     showMessage("enrollMessage", "");
     showEnrollCapture(true);
     enrollFlow.show(phrase);
   } catch (error) {
-    showMessage("enrollMessage", error.message, "error");
+    if (error.data?.pair_required) {
+      // účet už má šablónu z druhého zariadenia: toto sa pridáva kódom, ktorý vydá prihlásené zariadenie
+      $("pairField").hidden = false;
+      $("enrollPairCode").focus();
+      showMessage("enrollMessage", t(
+        `Tento účet už má šablónu z iného zariadenia. Prihlás sa na ňom, vytvor párovací kód pre ${DEVICE_NAMES[DEVICE]} a zadaj ho sem.`,
+        `This account already has a template from another device. Log in there, create a pairing code for the ${DEVICE_NAMES[DEVICE]} and enter it here.`), "error");
+    } else {
+      showMessage("enrollMessage", error.message, "error");
+    }
     enrollState = null;
   }
   resetTurnstile("enroll");
@@ -572,18 +589,19 @@ async function sendEnrollment(events) {
 
 async function finishEnrollment() {
   try {
-    const data = await api("/api/enrollment/finish", { user_id: enrollState.userId });
+    const data = await api("/api/enrollment/finish", { user_id: enrollState.userId, device: DEVICE });
     enrollFlow.stop();
     showEnrollCapture(false);
     $("enrollForm").reset();
+    $("pairField").hidden = true;
     $("enrollCounter").textContent = `0 / ${BOOT.min_enrollment}`;
     // rovno na prihlásenie s predvyplneným účtom
     $("verifyUsername").value = enrollState.username;
     $("verifyPassword").value = enrollState.password;
     enrollState = null;
     setTab("verification");
-    showMessage("verifyMessage", t(`Registrácia je hotová (${data.count} vzoriek, prah ${data.threshold.toFixed(3)}). Môžeš sa prihlásiť.`,
-      `Sign-up is complete (${data.count} samples, threshold ${data.threshold.toFixed(3)}). You can log in now.`), "success");
+    showMessage("verifyMessage", t(`Registrácia pre ${DEVICE_NAMES[DEVICE]} je hotová (${data.count} vzoriek, prah ${data.threshold.toFixed(3)}). Môžeš sa prihlásiť.`,
+      `Sign-up for the ${DEVICE_NAMES[DEVICE]} is complete (${data.count} samples, threshold ${data.threshold.toFixed(3)}). You can log in now.`), "success");
   } catch (error) {
     enrollFlow.status(error.message, "error");
   }
@@ -605,7 +623,7 @@ let verifyFlow;
 let verifyState = null;
 
 async function fetchVerifyPhrase() {
-  const data = await api("/api/verification/begin", { username: verifyState.username, turnstile: turnstileToken("verify") });
+  const data = await api("/api/verification/begin", { username: verifyState.username, device: DEVICE, turnstile: turnstileToken("verify") });
   verifyState.challenge = data.challenge;
   return data.phrase;
 }
@@ -639,9 +657,10 @@ async function startVerification() {
     const phrase = await fetchVerifyPhrase();
     $("verifyActiveUser").textContent = verifyState.testMode
       ? `${verifyState.username}, ${verifyState.attemptType} (${verifyState.actor})`
-      : verifyState.username;
+      : `${verifyState.username} (${DEVICE_NAMES[DEVICE]})`;
     $("resultCard").hidden = true;
     $("refreshCard").hidden = true;
+    $("pairCard").hidden = true;
     showMessage("verifyMessage", "");
     showVerifyCapture(true);
     verifyFlow.show(phrase);
@@ -658,6 +677,7 @@ async function submitVerification(events) {
       username: verifyState.username,
       password: verifyState.password,
       challenge: verifyState.challenge,
+      device: DEVICE,
       events,
       test_mode: verifyState.testMode,
       actor_label: verifyState.actor,
@@ -666,10 +686,13 @@ async function submitVerification(events) {
     renderResult(data);
     endVerification(BOTH_PASSED, "success");
     const refreshDue = !!(data.refresh && data.refresh.due);
+    // druhé zariadenie sa dá pridať len kódom z prihláseného zariadenia, preto ho ponúkneme tu
+    const missing = !data.test_mode && data.missing_devices?.length ? data.missing_devices[0] : null;
     if (refreshDue) showRefreshOffer(data.refresh);
-    // bežný používateľ po overení odchádza na internet; ponuka obnovy šablóny má prednosť
+    else if (missing) showPairOffer(missing);
+    // bežný používateľ po overení odchádza na internet; ponuky obnovy a druhého zariadenia majú prednosť
     leaveTo = data.redirect || null;
-    if (!refreshDue) leaveAfterLogin("verifyMessage", BOTH_PASSED);
+    if (!refreshDue && !missing) leaveAfterLogin("verifyMessage", BOTH_PASSED);
   } catch (error) {
     const data = error.data || {};
     if (error.status === 401 && data.result) {
@@ -687,8 +710,8 @@ async function submitVerification(events) {
       // zlé heslo, zamknutý účet alebo limit pokusov: ďalšie písanie by nepomohlo
       $("resultCard").hidden = true;
       endVerification(error.status === 401
-        ? t("Prihlásenie zlyhalo. Skontroluj meno a heslo. Ak registrácia nie je dokončená, dokonči ju najprv na karte Registrácia.",
-          "Login failed. Check the username and password. If the sign-up is not finished, finish it on the Sign up tab first.")
+        ? t(`Prihlásenie zlyhalo. Skontroluj meno a heslo. Počítač a telefón majú každý vlastnú šablónu: ak si sa na tomto zariadení (${DEVICE_NAMES[DEVICE]}) ešte neregistroval, sprav to na karte Registrácia.`,
+          `Login failed. Check the username and password. Computer and phone each have their own template: if you have not signed up on this device (${DEVICE_NAMES[DEVICE]}) yet, do it on the Sign up tab.`)
         : error.message);
       if (error.status === 401) $("verifyPassword").select();
     }
@@ -725,6 +748,43 @@ function leaveAfterLogin(messageId, text, delay = LEAVE_DELAY_MS) {
   const host = new URL(url).hostname;
   showMessage(messageId, `${text} ${t(`O chvíľu ťa presmerujem na ${host}.`, `Redirecting you to ${host} in a moment.`)}`, "success");
   setTimeout(() => location.assign(url), delay);
+}
+
+// ---------- druhé zariadenie ----------
+
+let pairDevice = null;
+
+function showPairOffer(device) {
+  pairDevice = device;
+  const name = DEVICE_NAMES[device];
+  $("pairTitle").textContent = t(`Pridať ${name}`, `Add a ${name}`);
+  $("pairText").textContent = t(
+    `Na ${device === "mobile" ? "telefóne" : "počítači"} píšeš inak, preto potrebuje vlastnú šablónu. Vytvor jednorazový kód a zadaj ho tam pri registrácii s rovnakým menom a heslom.`,
+    `You type differently on a ${name}, so it needs its own template. Create a one-time code and enter it there when signing up with the same username and password.`);
+  $("pairActions").hidden = false;
+  $("pairResult").hidden = true;
+  showMessage("pairMessage", "");
+  $("pairCard").hidden = false;
+}
+
+async function createPairCode() {
+  try {
+    const data = await api("/api/devices/pair", { device: pairDevice });
+    $("pairCode").textContent = data.code;
+    const minutes = Math.round(data.expires_in / 60);
+    $("pairHelp").textContent = t(
+      `Na ${data.device === "mobile" ? "telefóne" : "počítači"} otvor túto stránku, na karte Registrácia zadaj to isté meno a heslo, klikni Začať registráciu a potom zadaj tento kód. Platí ${minutes} minút a dá sa použiť raz.`,
+      `On the ${DEVICE_NAMES[data.device]}, open this page, enter the same username and password on the Sign up tab, click Start sign-up and then enter this code. It is valid for ${minutes} minutes and works once.`);
+    $("pairActions").hidden = true;
+    $("pairResult").hidden = false;
+  } catch (error) {
+    showMessage("pairMessage", error.message, "error");
+  }
+}
+
+function closePairOffer() {
+  $("pairCard").hidden = true;
+  leaveAfterLogin("verifyMessage", BOTH_PASSED, 800);
 }
 
 // ---------- mesačná obnova šablóny ----------
@@ -848,7 +908,10 @@ function buildFlows() {
 function setup() {
   drawDemo();
   // Dotyková klávesnica nehlási držanie kláves; šablóna z nej sa preto hodí len na to isté zariadenie.
-  $("touchNotice").hidden = !matchMedia("(hover: none) and (pointer: coarse)").matches;
+  $("touchNotice").hidden = DEVICE !== "mobile";
+  $("deviceLine").innerHTML = t(
+    `Toto zariadenie: <strong>${DEVICE_NAMES[DEVICE]}</strong>. Počítač a telefón majú každý vlastnú šablónu, registruješ sa na každom zvlášť.`,
+    `This device: <strong>${DEVICE_NAMES[DEVICE]}</strong>. Computer and phone each have their own template; you sign up on each separately.`);
   fetch("/api/bootstrap").then((r) => r.json()).then((boot) => {
     BOOT = boot;
     $("configPill").textContent = `${t("metrika", "metric")} ${boot.metric}, k = ${boot.k}`;
@@ -883,6 +946,10 @@ function setup() {
     $("refreshCapture").hidden = false;
     refreshFlow.next();
   });
+  $("pairStart").addEventListener("click", createPairCode);
+  $("pairLater").addEventListener("click", closePairOffer);
+  $("pairDone").addEventListener("click", closePairOffer);
+
   $("refreshLater").addEventListener("click", () => {
     $("refreshCard").hidden = true;
     leaveAfterLogin("verifyMessage", BOTH_PASSED, 800);
