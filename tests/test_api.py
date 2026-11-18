@@ -633,3 +633,20 @@ def test_old_single_template_moves_to_computer(client):
     assert moved["template_json"] == tpl["template_json"] and moved["cycle"] == 2
     assert db.get_user(user_id)["template_json"] is None
     assert login(client)["accepted"] is True
+
+
+def test_old_template_typed_on_a_phone_moves_to_phone(client):
+    """Kto sa zaregistroval na telefóne ešte pred rozdelením šablón, mal šablónu zaradenú ako
+    počítač. Vzorky z dotykovej klávesnice (nulové držanie kláves) ju vrátia telefónu."""
+    import backend.db as db
+    enroll(client, touch=True)            # zariadenie sa vtedy neposielalo: uložilo sa ako "pc"
+    user_id = db.get_user_by_username("P01")["id"]
+    tpl = db.get_template(user_id, "pc")
+    with db._connect() as conn:
+        conn.execute("DELETE FROM templates")
+        conn.execute("UPDATE users SET template_json = ? WHERE id = ?", (tpl["template_json"], user_id))
+    db.init_db()
+    assert [row["device"] for row in db.get_templates(user_id)] == ["mobile"]
+    assert len(db.get_enrollment_samples(user_id, "mobile")) == 12
+    r = verify(client, "P01", "dlhe-heslo-123", random.Random(50), device="mobile", touch=True, jitter=5.0)
+    assert r.status_code == 200, r.get_json()

@@ -14,6 +14,10 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .config import settings
+from .features import FEATURE_NAMES
+
+# dwell príznaky: 27 kláves a celkový medián (vzorky staršej verzie nemajú percentily dwell)
+DWELL_INDEXES = [i for i, name in enumerate(FEATURE_NAMES) if name.startswith("dwell:") or name == "median_dwell"]
 
 
 def now_iso() -> str:
@@ -226,18 +230,45 @@ def init_db() -> None:
             for name, ddl in wanted:
                 if name not in columns:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
-        # Šablóna bola kedysi priamo v users (jedna na účet, vznikla na počítači): presunie sa do templates.
+        # Šablóna bola kedysi priamo v users (jedna na účet): presunie sa do templates ako šablóna počítača.
         conn.execute(
             "INSERT INTO templates (user_id, device, template_json, updated_at, cycle) "
             "SELECT id, 'pc', template_json, COALESCE(template_updated_at, created_at), COALESCE(template_cycle, 0) "
             "FROM users WHERE template_json IS NOT NULL"
         )
         conn.execute("UPDATE users SET template_json = NULL WHERE template_json IS NOT NULL")
+        _reassign_touch_templates(conn)
         if IS_POSTGRES:
             # Supabase vystavuje schému public cez REST API s verejným anon kľúčom. Zapnuté RLS
             # bez politík tam všetko zakáže; backend sa pripája ako vlastník tabuliek a RLS sa ho netýka.
             for table in TABLES:
                 conn.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
+
+
+def _touch_vector(vector: list[float | None]) -> bool:
+    """Vzorka z dotykovej klávesnice: tá nehlási držanie klávesy, takže každý dwell je 0.
+    Na fyzickej klávesnici trvá stlačenie vždy desiatky milisekúnd."""
+    values = [vector[i] for i in DWELL_INDEXES if i < len(vector) and vector[i] is not None]
+    return bool(values) and all(float(v) < 1.0 for v in values)
+
+
+def _reassign_touch_templates(conn) -> None:
+    """Účty, ktoré sa zaregistrovali na telefóne ešte pred rozdelením šablón podľa zariadenia,
+    dostali pri presune šablónu počítača. Ak sú všetky ich vzorky z dotykovej klávesnice,
+    šablóna aj vzorky patria telefónu."""
+    rows = conn.execute(
+        "SELECT user_id FROM templates t WHERE device = 'pc' AND NOT EXISTS "
+        "(SELECT 1 FROM templates m WHERE m.user_id = t.user_id AND m.device = 'mobile')"
+    ).fetchall()
+    for row in rows:
+        user_id = row["user_id"]
+        samples = conn.execute(
+            "SELECT features_json FROM enrollment_samples WHERE user_id = ? AND device = 'pc'", (user_id,)
+        ).fetchall()
+        if not samples or not all(_touch_vector(json.loads(s["features_json"])) for s in samples):
+            continue
+        for table in ("templates", "enrollment_samples", "refresh_samples", "template_history"):
+            conn.execute(f"UPDATE {table} SET device = 'mobile' WHERE user_id = ? AND device = 'pc'", (user_id,))
 
 
 def feature_hash(features: list[float | None]) -> str:
