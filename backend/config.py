@@ -90,8 +90,8 @@ class Settings:
             raise ValueError("COV_SHRINKAGE musí byť v rozsahu (0,1]")
         if self.MIN_ENROLLMENT < 5 or self.MAX_ENROLLMENT < self.MIN_ENROLLMENT:
             raise ValueError("Neplatný rozsah počtu enrollment vzoriek")
-        if not (3 <= self.SECOND_DEVICE_MIN_ENROLLMENT <= self.MIN_ENROLLMENT):
-            raise ValueError("SECOND_DEVICE_MIN_ENROLLMENT musí byť v rozsahu 3..MIN_ENROLLMENT")
+        if not (5 <= self.SECOND_DEVICE_MIN_ENROLLMENT <= self.MIN_ENROLLMENT):
+            raise ValueError("SECOND_DEVICE_MIN_ENROLLMENT musí byť v rozsahu 5..MIN_ENROLLMENT")
         if self.TEMPLATE_REFRESH_DAYS < 1 or self.REFRESH_SAMPLES < 3:
             raise ValueError("Neplatné nastavenie mesačnej obnovy")
         if not (20 <= self.PHRASE_MIN_LEN < self.PHRASE_MAX_LEN <= 80):
