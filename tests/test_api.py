@@ -575,11 +575,11 @@ def test_one_account_logs_in_on_computer_and_phone(client):
     enroll(client)
     code = pair_code(client)
     phone = other_client(client)
-    enroll(phone, device="mobile", pair_code=code, touch=True, sig=4, scale=1.6)
+    enroll(phone, device="mobile", pair_code=code, n=6, touch=True, sig=4, scale=1.6)
     user_id = db.get_user_by_username("P01")["id"]
     assert sorted(row["device"] for row in db.get_templates(user_id)) == ["mobile", "pc"]
     assert len(db.get_enrollment_samples(user_id, "pc")) == 12
-    assert len(db.get_enrollment_samples(user_id, "mobile")) == 12
+    assert len(db.get_enrollment_samples(user_id, "mobile")) == 6
 
     r = verify(phone, "P01", "dlhe-heslo-123", random.Random(60), device="mobile", touch=True, sig=4, scale=1.6, jitter=5.0)
     assert r.status_code == 200, r.get_json()
@@ -595,7 +595,7 @@ def test_one_account_logs_in_on_computer_and_phone(client):
 
     report = client.get("/api/admin/overview").get_json()["report"]
     assert sorted((u["username"], u["device"], u["enrollment_n"]) for u in report["users"]) == [
-        ("P01", "mobile", 12), ("P01", "pc", 12)]
+        ("P01", "mobile", 6), ("P01", "pc", 12)]
 
 
 def test_pairing_code_works_once_and_for_its_device(client):
@@ -670,3 +670,31 @@ def test_rate_limit_is_json_with_retry_after(client):
     assert r.status_code == 429
     assert r.is_json and r.get_json()["error"]
     assert int(r.headers["Retry-After"]) > 0
+
+
+def test_second_device_needs_only_a_short_enrollment(client):
+    """Prvé zariadenie potrebuje plný počet viet, druhé (s párovacím kódom) len SECOND_DEVICE_MIN_ENROLLMENT."""
+    import backend.config as config
+    first = client.post("/api/enrollment/begin", json={"username": "P01", "password": "dlhe-heslo-123",
+                        "password_confirm": "dlhe-heslo-123", "device": "pc"}, headers=client.csrf).get_json()
+    assert first["min_enrollment"] == config.settings.MIN_ENROLLMENT and first["second_device"] is False
+    enroll(client)
+    code = pair_code(client)
+    phone = other_client(client)
+    rng = random.Random(7)
+    body = {"username": "P01", "password": "dlhe-heslo-123", "password_confirm": "dlhe-heslo-123",
+            "device": "mobile", "pair_code": code}
+    minimum = config.settings.SECOND_DEVICE_MIN_ENROLLMENT
+    assert minimum == 6
+    for i in range(minimum):
+        b = phone.post("/api/enrollment/begin", json=body, headers=phone.csrf).get_json()
+        assert b["min_enrollment"] == minimum and b["second_device"] is True
+        r = phone.post("/api/enrollment/sample", json={"user_id": b["user_id"], "challenge": b["challenge"],
+                       "events": make_events(b["phrase"], rng, touch=True, sig=4)}, headers=phone.csrf)
+        assert r.get_json()["template_ready"] is (i + 1 >= minimum)
+        if i == minimum - 2:   # o jednu menej ešte nestačí
+            early = phone.post("/api/enrollment/finish", json={"user_id": b["user_id"], "device": "mobile"}, headers=phone.csrf)
+            assert early.status_code == 400
+    r = phone.post("/api/enrollment/finish", json={"user_id": b["user_id"], "device": "mobile"}, headers=phone.csrf)
+    assert r.status_code == 200 and r.get_json()["count"] == minimum
+    assert client.get("/api/config").get_json()["second_device_min_enrollment"] == minimum

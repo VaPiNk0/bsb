@@ -23,6 +23,8 @@ class Settings:
     # Pri meniacom sa texte treba viac enrollment vzoriek než pri jednej pevnej vete.
     MIN_ENROLLMENT: int = int(os.getenv("MIN_ENROLLMENT", "12"))
     MAX_ENROLLMENT: int = int(os.getenv("MAX_ENROLLMENT", "20"))
+    # Druhé zariadenie (účet už má šablónu z iného): stačí kratšia registrácia.
+    SECOND_DEVICE_MIN_ENROLLMENT: int = int(os.getenv("SECOND_DEVICE_MIN_ENROLLMENT", "6"))
 
     # Mesačná obnova šablóny (drift písania)
     TEMPLATE_REFRESH_DAYS: int = int(os.getenv("TEMPLATE_REFRESH_DAYS", "30"))
@@ -88,6 +90,8 @@ class Settings:
             raise ValueError("COV_SHRINKAGE musí byť v rozsahu (0,1]")
         if self.MIN_ENROLLMENT < 5 or self.MAX_ENROLLMENT < self.MIN_ENROLLMENT:
             raise ValueError("Neplatný rozsah počtu enrollment vzoriek")
+        if not (3 <= self.SECOND_DEVICE_MIN_ENROLLMENT <= self.MIN_ENROLLMENT):
+            raise ValueError("SECOND_DEVICE_MIN_ENROLLMENT musí byť v rozsahu 3..MIN_ENROLLMENT")
         if self.TEMPLATE_REFRESH_DAYS < 1 or self.REFRESH_SAMPLES < 3:
             raise ValueError("Neplatné nastavenie mesačnej obnovy")
         if not (20 <= self.PHRASE_MIN_LEN < self.PHRASE_MAX_LEN <= 80):

@@ -572,6 +572,9 @@ async function fetchEnrollPhrase() {
   });
   enrollState.userId = data.user_id;
   enrollState.challenge = data.challenge;
+  enrollState.min = data.min_enrollment;
+  // druhé zariadenie účtu: kratšia registrácia, hotovo hneď po minimálnom počte viet
+  if (data.second_device) enrollState.target = data.min_enrollment;
   enrollState.count = data.count;
   renderEnrollState();
   return data.phrase;
@@ -582,7 +585,7 @@ function renderEnrollState() {
   $("enrollCounter").textContent = `${count} / ${target}`;
   $("enrollSampleNo").textContent = `${Math.min(count + 1, target)} / ${target}`;
   segments("enrollProgress", count, target);
-  $("enrollFinish").disabled = count < BOOT.min_enrollment;
+  $("enrollFinish").disabled = count < (enrollState.min ?? BOOT.min_enrollment);
 }
 
 // Pred začatím registrácie počítadlo ukazuje cieľ zvolený v selecte, nie minimum.
@@ -626,8 +629,8 @@ async function startEnrollment() {
       // účet už má šablónu z druhého zariadenia: toto sa pridáva kódom, ktorý vydá prihlásené zariadenie
       $("enrollPairCode").focus();
       showMessage("enrollMessage", t(
-        `Tento účet už má šablónu z iného zariadenia. Prihlás sa na ňom, vytvor párovací kód pre ${DEVICE_NAMES[DEVICE]} a zadaj ho sem.`,
-        `This account already has a template from another device. Log in there, create a pairing code for the ${DEVICE_NAMES[DEVICE]} and enter it here.`), "error");
+        `Tento účet už má šablónu z iného zariadenia. Prihlás sa na ňom, vytvor párovací kód pre ${DEVICE_NAMES[DEVICE]} a zadaj ho sem. Potom stačí ${BOOT.second_device_min_enrollment} viet.`,
+        `This account already has a template from another device. Log in there, create a pairing code for the ${DEVICE_NAMES[DEVICE]} and enter it here. Then ${BOOT.second_device_min_enrollment} sentences are enough.`), "error");
     } else {
       showMessage("enrollMessage", error.message, "error");
     }
@@ -827,8 +830,8 @@ function showPairOffer(device) {
   const name = DEVICE_NAMES[device];
   $("pairTitle").textContent = t(`Pridať ${name}`, `Add a ${name}`);
   $("pairText").textContent = t(
-    `Na ${device === "mobile" ? "telefóne" : "počítači"} píšeš inak, preto potrebuje vlastnú šablónu. Vytvor jednorazový kód a zadaj ho tam pri registrácii s rovnakým menom a heslom.`,
-    `You type differently on a ${name}, so it needs its own template. Create a one-time code and enter it there when signing up with the same username and password.`);
+    `Na ${device === "mobile" ? "telefóne" : "počítači"} píšeš inak, preto potrebuje vlastnú šablónu. Vytvor jednorazový kód a zadaj ho tam pri registrácii s rovnakým menom a heslom; stačí ${BOOT.second_device_min_enrollment} viet.`,
+    `You type differently on a ${name}, so it needs its own template. Create a one-time code and enter it there when signing up with the same username and password; ${BOOT.second_device_min_enrollment} sentences are enough.`);
   $("pairActions").hidden = false;
   $("pairResult").hidden = true;
   showMessage("pairMessage", "");

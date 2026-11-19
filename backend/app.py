@@ -234,6 +234,14 @@ def current_template(tpl) -> dict:
     return template
 
 
+def enrollment_minimum(user_id: int, device: str) -> int:
+    """Koľko vzoriek treba na šablónu: druhé zariadenie účtu (prvé už má šablónu) sa registruje
+    kratšie, prvé plným počtom."""
+    if any(tpl["device"] != device for tpl in get_templates(user_id)):
+        return settings.SECOND_DEVICE_MIN_ENROLLMENT
+    return settings.MIN_ENROLLMENT
+
+
 def session_user():
     """Prihlásený používateľ a šablóna zariadenia, z ktorého sa prihlásil."""
     if "auth_user_id" not in session:
@@ -402,6 +410,7 @@ def public_config() -> dict:
         challenge_ttl=settings.CHALLENGE_TTL_SECONDS,
         min_enrollment=settings.MIN_ENROLLMENT,
         max_enrollment=settings.MAX_ENROLLMENT,
+        second_device_min_enrollment=settings.SECOND_DEVICE_MIN_ENROLLMENT,
         metric=settings.METRIC,
         k=settings.K,
         test_mode_allowed=settings.ALLOW_TEST_MODE,
@@ -469,6 +478,7 @@ def enrollment_begin():
         session["enroll_device"] = device
         token, challenge_id, phrase = make_challenge(user_id, "enrollment", lang, device)
         count = len(get_enrollment_samples(user_id, device))
+        minimum = enrollment_minimum(user_id, device)
         return jsonify(
             user_id=user_id,
             device=device,
@@ -476,7 +486,8 @@ def enrollment_begin():
             challenge_id=challenge_id,
             count=count,
             phrase=phrase,
-            min_enrollment=settings.MIN_ENROLLMENT,
+            second_device=minimum != settings.MIN_ENROLLMENT,
+            min_enrollment=minimum,
             max_enrollment=settings.MAX_ENROLLMENT,
         )
     except ValueError as exc:
@@ -506,7 +517,7 @@ def enrollment_sample():
             return jsonify(error="Maximum enrollment vzoriek už bolo dosiahnuté."), 409
         add_enrollment_sample(user_id, next_sample_index(user_id), features, challenge["phrase"], device=device)
         new_count = existing + 1
-        template_ready = new_count >= settings.MIN_ENROLLMENT
+        template_ready = new_count >= enrollment_minimum(user_id, device)
         return jsonify(count=new_count, template_ready=template_ready, max_enrollment=settings.MAX_ENROLLMENT)
     except (ValueError, TypeError) as exc:
         return jsonify(error=str(exc)), 400
@@ -525,8 +536,9 @@ def enrollment_finish():
         if get_template(user_id, device):
             return jsonify(error="Tento účet už má šablónu pre tento typ zariadenia."), 409
         samples = get_enrollment_samples(user_id, device)
-        if len(samples) < settings.MIN_ENROLLMENT:
-            return jsonify(error=f"Potrebných je aspoň {settings.MIN_ENROLLMENT} vzoriek."), 400
+        minimum = enrollment_minimum(user_id, device)
+        if len(samples) < minimum:
+            return jsonify(error=f"Potrebných je aspoň {minimum} vzoriek."), 400
         template = make_template(vectors_of(samples))
         save_template(user_id, device, template)
         session.pop("enroll_user_id", None)
