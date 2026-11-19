@@ -383,23 +383,78 @@ function resetTurnstile(name) {
 
 // ---------- pomocné ----------
 
+// Odpoveď sa parsuje ako JSON len vtedy, keď ním naozaj je: hosting pri preťažení vracia aj text
+// alebo HTML („Too Many Requests“) a res.json() by spadlo na nezmyselnej chybe.
+async function readResponse(response) {
+  const type = response.headers.get("Content-Type") || "";
+  if (type.includes("application/json")) return response.json().catch(() => ({}));
+  await response.text().catch(() => "");
+  return {};
+}
+
+function retryAfterSeconds(response, data) {
+  const header = Number(response.headers.get("Retry-After"));
+  const seconds = Number.isFinite(header) && header > 0 ? header : Number(data.retry_after) || 0;
+  return seconds > 0 ? seconds : null;
+}
+
+function httpError(response, data) {
+  let message = data.error;
+  if (response.status === 429) {
+    message = t("Server je momentálne preťažený (príliš veľa požiadaviek).", "The server is busy right now (too many requests).");
+    if (data.error && !/preťažený/.test(data.error)) message = data.error;   // vlastný limit pokusov má presnejšiu hlášku
+  } else if (!message && response.status >= 500) {
+    message = t("Server je dočasne nedostupný, skús to o chvíľu.", "The server is temporarily unavailable, try again in a moment.");
+  }
+  const error = new Error(message || `HTTP ${response.status}`);
+  error.status = response.status;
+  error.data = data;
+  error.retryAfter = retryAfterSeconds(response, data);
+  return error;
+}
+
+async function getJson(path, options = {}) {
+  const response = await fetch(path, options);
+  const data = await readResponse(response);
+  if (!response.ok) throw httpError(response, data);
+  return data;
+}
+
+const RETRYABLE = new Set([429, 502, 503, 504]);
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Načítanie konfigurácie s opakovaním: pri 429/5xx (a výpadku siete) čakáme podľa Retry-After.
+async function loadConfig(onWait, attempts = 5) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await getJson("/api/config");
+    } catch (error) {
+      const retryable = error.status === undefined || RETRYABLE.has(error.status);
+      if (!retryable || attempt >= attempts) throw error;
+      const seconds = Math.min(Math.max(error.retryAfter || 2 ** attempt, 2), 60);
+      onWait(error, seconds);
+      await sleep(seconds * 1000);
+    }
+  }
+}
+
+async function refreshCsrf() {
+  const boot = await getJson("/api/bootstrap", { cache: "no-store" });
+  BOOT.csrf = boot.csrf;
+}
+
 async function api(path, body = null, method = "POST", retry = true) {
+  if (!BOOT.csrf) await refreshCsrf();   // config je bez relácie; token si vypýtame až pri prvej akcii
   const options = { method, headers: { "Content-Type": "application/json", "X-CSRF-Token": BOOT.csrf, "X-Lang": LANG } };
   if (body !== null) options.body = JSON.stringify(body);
   const response = await fetch(path, options);
-  const data = await response.json().catch(() => ({}));
+  const data = await readResponse(response);
   // Relácia medzičasom zanikla (reštart servera, zmazané cookies): vypýtame si nový token a skúsime raz znova.
   if (response.status === 400 && retry && /CSRF/.test(data.error || "")) {
-    const boot = await fetch("/api/bootstrap", { cache: "no-store" }).then((r) => r.json());
-    BOOT.csrf = boot.csrf;
+    await refreshCsrf();
     return api(path, body, method, false);
   }
-  if (!response.ok) {
-    const error = new Error(data.error || `HTTP ${response.status}`);
-    error.status = response.status;
-    error.data = data;
-    throw error;
-  }
+  if (!response.ok) throw httpError(response, data);
   return data;
 }
 
@@ -530,6 +585,21 @@ function renderEnrollState() {
   $("enrollFinish").disabled = count < BOOT.min_enrollment;
 }
 
+// Pred začatím registrácie počítadlo ukazuje cieľ zvolený v selecte, nie minimum.
+function resetEnrollCounter() {
+  $("enrollCounter").textContent = `0 / ${$("enrollTarget").value}`;
+}
+
+function whenConfigured(action, messageId) {
+  return async () => {
+    if (!BOOT) {
+      showMessage(messageId, t("Konfigurácia sa ešte nenačítala, chvíľu počkaj.", "The configuration has not loaded yet, wait a moment."), "error");
+      return;
+    }
+    await action();
+  };
+}
+
 function showEnrollCapture(on) {
   $("enrollForm").hidden = on;
   $("enrollCapture").hidden = !on;
@@ -594,7 +664,7 @@ async function finishEnrollment() {
     showEnrollCapture(false);
     $("enrollForm").reset();
     $("pairField").hidden = true;
-    $("enrollCounter").textContent = `0 / ${BOOT.min_enrollment}`;
+    resetEnrollCounter();
     // rovno na prihlásenie s predvyplneným účtom
     $("verifyUsername").value = enrollState.username;
     $("verifyPassword").value = enrollState.password;
@@ -611,7 +681,7 @@ function cancelEnrollment() {
   enrollFlow.stop();
   enrollState = null;
   showEnrollCapture(false);
-  $("enrollCounter").textContent = `0 / ${BOOT.min_enrollment}`;
+  resetEnrollCounter();
   showMessage("enrollMessage", t("Registrácia je prerušená. Uložené vzorky zostali; s rovnakým menom a heslom v nej môžeš pokračovať.", "Sign-up is paused. Saved samples are kept; you can continue with the same username and password."), "info");
 }
 
@@ -912,20 +982,25 @@ function setup() {
   $("deviceLine").innerHTML = t(
     `Toto zariadenie: <strong>${DEVICE_NAMES[DEVICE]}</strong>. Počítač a telefón majú každý vlastnú šablónu, registruješ sa na každom zvlášť.`,
     `This device: <strong>${DEVICE_NAMES[DEVICE]}</strong>. Computer and phone each have their own template; you sign up on each separately.`);
-  fetch("/api/bootstrap").then((r) => r.json()).then((boot) => {
-    BOOT = boot;
-    $("configPill").textContent = `${t("metrika", "metric")} ${boot.metric}, k = ${boot.k}`;
-    $("testModeRow").hidden = !boot.test_mode_allowed;
-    buildFlows();
-    setupTurnstile();
-    $("enrollCounter").textContent = `0 / ${boot.min_enrollment}`;
-    $("enrollTarget").innerHTML = [boot.min_enrollment, Math.round((boot.min_enrollment + boot.max_enrollment) / 2), boot.max_enrollment]
-      .map((n, i) => `<option value="${n}" ${i === 1 ? "selected" : ""}>${n}</option>`).join("");
-  }).catch((error) => showMessage("enrollMessage", `${t("Načítanie konfigurácie zlyhalo", "Loading the configuration failed")}: ${error.message}`, "error"));
+  loadConfig((error, seconds) => showMessage("enrollMessage",
+    `${error.message} ${t(`Skúšam znova o ${seconds} s…`, `Retrying in ${seconds} s…`)}`, "info"))
+    .then((config) => {
+      BOOT = { ...config, csrf: null };
+      $("configPill").textContent = `${t("metrika", "metric")} ${config.metric}, k = ${config.k}`;
+      $("testModeRow").hidden = !config.test_mode_allowed;
+      buildFlows();
+      setupTurnstile();
+      $("enrollTarget").innerHTML = [config.min_enrollment, Math.round((config.min_enrollment + config.max_enrollment) / 2), config.max_enrollment]
+        .map((n, i) => `<option value="${n}" ${i === 1 ? "selected" : ""}>${n}</option>`).join("");
+      resetEnrollCounter();
+      showMessage("enrollMessage", "");
+    })
+    .catch((error) => showMessage("enrollMessage", `${t("Načítanie konfigurácie zlyhalo", "Loading the configuration failed")}: ${error.message}`, "error"));
+  $("enrollTarget").addEventListener("change", () => { if (!enrollState) resetEnrollCounter(); });
 
   document.querySelectorAll(".tab").forEach((button) => button.addEventListener("click", () => setTab(button.dataset.tab)));
 
-  submitOnce($("enrollForm"), startEnrollment);
+  submitOnce($("enrollForm"), whenConfigured(startEnrollment, "enrollMessage"));
   $("enrollSkip").addEventListener("click", () => enrollFlow.next());
   $("enrollFinish").addEventListener("click", finishEnrollment);
   $("enrollCancel").addEventListener("click", cancelEnrollment);
@@ -937,7 +1012,7 @@ function setup() {
     $("verifyUsernameLabel").textContent = on ? t("Cieľový účet / koho napodobňuješ", "Target account / who you imitate") : t("Používateľské meno", "Username");
     if (on) $("verifyConsent").checked = true;
   });
-  submitOnce($("verifyForm"), startVerification);
+  submitOnce($("verifyForm"), whenConfigured(startVerification, "verifyMessage"));
   $("verifyNew").addEventListener("click", () => verifyFlow.next());
   $("verifyBack").addEventListener("click", () => endVerification());
 

@@ -650,3 +650,23 @@ def test_old_template_typed_on_a_phone_moves_to_phone(client):
     assert len(db.get_enrollment_samples(user_id, "mobile")) == 12
     r = verify(client, "P01", "dlhe-heslo-123", random.Random(50), device="mobile", touch=True, jitter=5.0)
     assert r.status_code == 200, r.get_json()
+
+
+def test_config_is_public_cacheable_and_sessionless(client):
+    fresh = client.application.test_client()   # bez cookies relácie
+    r = fresh.get("/api/config")
+    assert r.status_code == 200
+    assert "csrf" not in r.get_json()
+    assert r.get_json()["min_enrollment"] == client.get("/api/bootstrap").get_json()["min_enrollment"]
+    assert "public" in r.headers["Cache-Control"]
+    assert "Set-Cookie" not in r.headers
+
+
+@pytest.mark.parametrize("client", [{"RATE_LIMIT_MAX_ATTEMPTS": "1"}], indirect=True)
+def test_rate_limit_is_json_with_retry_after(client):
+    enroll(client, "RL01")
+    verify(client, "RL01", "zle-heslo-123", random.Random(3))
+    r = client.post("/api/verification/begin", json={"username": "RL01", "device": "pc"}, headers=client.csrf)
+    assert r.status_code == 429
+    assert r.is_json and r.get_json()["error"]
+    assert int(r.headers["Retry-After"]) > 0

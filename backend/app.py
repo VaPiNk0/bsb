@@ -262,6 +262,14 @@ def session_admin():
     return user if user and is_admin(user["username"]) else None
 
 
+def too_many(exc: Exception):
+    """Odpoveď limitu pokusov: JSON s chybou a Retry-After, aby klient vedel, kedy skúsiť znova."""
+    response = jsonify(error=str(exc), retry_after=settings.RATE_LIMIT_WINDOW_SECONDS)
+    response.status_code = 429
+    response.headers["Retry-After"] = str(settings.RATE_LIMIT_WINDOW_SECONDS)
+    return response
+
+
 def verify_rate_limit(username: str) -> None:
     count = recent_attempt_count(client_ip(), username, settings.RATE_LIMIT_WINDOW_SECONDS)
     if count >= settings.RATE_LIMIT_MAX_ATTEMPTS:
@@ -359,7 +367,7 @@ def security_headers(response):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
-    if request.path.startswith("/api/"):
+    if request.path.startswith("/api/") and request.path != "/api/config":
         response.headers["Cache-Control"] = "no-store"   # CSRF token ani výsledky sa nesmú brať z cache
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; style-src 'self'; "
@@ -387,11 +395,8 @@ def static_files(filename: str):
     return send_from_directory(FRONTEND, filename)
 
 
-@app.get("/api/bootstrap")
-def bootstrap():
-    token = csrf_token()
-    return jsonify(
-        csrf=token,
+def public_config() -> dict:
+    return dict(
         feature_count=FEATURE_COUNT,
         max_corrections=settings.MAX_CORRECTIONS,
         challenge_ttl=settings.CHALLENGE_TTL_SECONDS,
@@ -402,6 +407,20 @@ def bootstrap():
         test_mode_allowed=settings.ALLOW_TEST_MODE,
         turnstile_site_key=settings.TURNSTILE_SITE_KEY if settings.TURNSTILE_SECRET else "",
     )
+
+
+@app.get("/api/config")
+def config():
+    """Konfigurácia bez relácie a bez CSRF: rovnaká pre všetkých, takže ju proxy aj prehliadač
+    môžu cachovať a obyčajné otvorenie stránky nemusí vôbec prísť až na backend."""
+    response = jsonify(public_config())
+    response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=86400, stale-if-error=86400"
+    return response
+
+
+@app.get("/api/bootstrap")
+def bootstrap():
+    return jsonify(csrf=csrf_token(), **public_config())
 
 
 @app.post("/api/enrollment/begin")
@@ -534,7 +553,7 @@ def verification_begin():
         token, challenge_id, phrase = make_challenge(int(user["id"]), "verification", phrase_lang(user), device)
         return jsonify(challenge=token, challenge_id=challenge_id, phrase=phrase)
     except PermissionError as exc:
-        return jsonify(error=str(exc)), 429
+        return too_many(exc)
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
 
@@ -659,7 +678,7 @@ def verification():
             missing_devices=[d for d in DEVICES if d not in devices] if accepted else None,
         ), (200 if accepted else 401)
     except PermissionError as exc:
-        return jsonify(error=str(exc)), 429
+        return too_many(exc)
     except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
         return jsonify(error=str(exc)), 400
 
