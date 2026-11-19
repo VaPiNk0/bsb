@@ -624,7 +624,6 @@ async function startEnrollment() {
   } catch (error) {
     if (error.data?.pair_required) {
       // účet už má šablónu z druhého zariadenia: toto sa pridáva kódom, ktorý vydá prihlásené zariadenie
-      $("pairField").hidden = false;
       $("enrollPairCode").focus();
       showMessage("enrollMessage", t(
         `Tento účet už má šablónu z iného zariadenia. Prihlás sa na ňom, vytvor párovací kód pre ${DEVICE_NAMES[DEVICE]} a zadaj ho sem.`,
@@ -663,7 +662,6 @@ async function finishEnrollment() {
     enrollFlow.stop();
     showEnrollCapture(false);
     $("enrollForm").reset();
-    $("pairField").hidden = true;
     resetEnrollCounter();
     // rovno na prihlásenie s predvyplneným účtom
     $("verifyUsername").value = enrollState.username;
